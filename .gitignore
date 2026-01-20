@@ -205,3 +205,23 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Evolution API / TypeScript
+dist/
+build/
+*.tsbuildinfo
+
+# Prisma
+# Ignoramos o arquivo do SQLite (caso tenha sobrado algo)
+*.db
+*.db-journal
+
+# Docker (se houver dados persistidos localmente)
+docker/data

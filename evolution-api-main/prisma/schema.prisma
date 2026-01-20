@@ -1,0 +1,111 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Instance {
+  id               String     @id @default(uuid())
+  name             String     @unique
+  description      String?
+  connection       String?    @default("close")
+  connectionStatus String?    @default("close")
+  owner            String?
+  profilePic       String?
+  profileStatus    String?
+  
+  // Novos campos exigidos pela v2.3.7
+  integration      String?    @default("WHATSAPP-BAILEYS")
+  token            String?    @unique
+  number           String?
+  businessId       String?
+  clientName       String?    @default("evolution")
+
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+
+  // Relacionamentos
+  Chatwoot         Chatwoot?
+  Proxy            Proxy?
+  Rabbitmq         Rabbitmq?
+  Nats             Nats?
+  Sqs              Sqs?
+  Websocket        Websocket?
+  Setting          Setting?
+  Message          Message[]
+  Contact          Contact[]
+  Chat             Chat[]
+}
+
+model Setting {
+  id              String   @id @default(uuid())
+  instanceId      String   @unique
+  rejectCall      Boolean  @default(false)
+  msgCall         String?  @default("")
+  groupsIgnore    Boolean  @default(false)
+  alwaysOnline    Boolean  @default(false)
+  readMessages    Boolean  @default(false)
+  readStatus      Boolean  @default(false)
+  syncFullHistory Boolean  @default(false)
+  wavoipToken     String?  @default("")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  instance        Instance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+}
+
+model Chatwoot {
+  id         String   @id @default(uuid())
+  instanceId String   @unique
+  instance   Instance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+}
+
+model Proxy {
+  id         String   @id @default(uuid())
+  instanceId String   @unique
+  instance   Instance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+}
+
+model Rabbitmq {
+  id         String   @id @default(uuid())
+  instanceId String   @unique
+  instance   Instance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+}
+
+model Nats {
+  id         String   @id @default(uuid())
+  instanceId String   @unique
+  instance   Instance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+}
+
+model Sqs {
+  id         String   @id @default(uuid())
+  instanceId String   @unique
+  instance   Instance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+}
+
+model Websocket {
+  id         String   @id @default(uuid())
+  instanceId String   @unique
+  instance   Instance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+}
+
+model Message {
+  id         String   @id @default(uuid())
+  instanceId String
+  instance   Instance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+}
+
+model Contact {
+  id         String   @id @default(uuid())
+  instanceId String
+  instance   Instance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+}
+
+model Chat {
+  id         String   @id @default(uuid())
+  instanceId String
+  instance   Instance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+}
