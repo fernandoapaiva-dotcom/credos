@@ -122,11 +122,18 @@ export class EventController {
       return null;
     }
 
-    const data = await this.prisma[this.name].findUnique({
-      where: {
-        instanceId: this.monitor.waInstances[instanceName].instanceId,
-      },
-    });
+    let data = null;
+    try {
+      data = await this.prisma[this.name].findUnique({
+        where: {
+          instanceId: this.monitor.waInstances[instanceName].instanceId,
+        },
+      });
+    } catch (error) {
+      console.log(`[Aviso] Tabela ${this.name} não encontrada, ignorando...`);
+      return null;
+    }
+    return data;
 
     if (!data) {
       return null;
