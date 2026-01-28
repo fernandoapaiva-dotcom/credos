@@ -3,133 +3,172 @@ import os
 import pandas as pd
 import requests
 import time
-from src.extractor import extrair_dados_boletos
-from src.database import salvar_dados_no_banco, inicializar_banco, get_connection, atualizar_status_titulo, obter_metricas_mensais, obter_ranking_devedores
-from src.manager import Manager
+from dotenv import load_dotenv
 
+# Importações do ecossistema src/
+from src.extractor import extrair_dados_boletos
+from src.database import (
+    salvar_dados_no_banco, inicializar_banco, get_connection, 
+    obter_metricas_mensais
+)
+from src.manager import Manager
+from src.ai_handler import get_ai_response
+
+# Carregar variáveis de ambiente
+load_dotenv()
+
+# Configuração da Página
 st.set_page_config(page_title="Credos SaaS", page_icon="🛡️", layout="wide")
+
+# Inicializar Banco de Dados
 inicializar_banco()
+
+# --- ESTILIZAÇÃO CUSTOMIZADA ---
+st.markdown("""
+    <style>
+    .main { background-color: #f8f9fa; }
+    .stButton>button { width: 100%; border-radius: 8px; font-weight: bold; }
+    .stExpander { background-color: white; border-radius: 10px; border: 1px solid #ddd; }
+    .css-1kyx06p { background-color: #f1f3f6; } /* Cor de fundo das tabs */
+    </style>
+    """, unsafe_allow_html=True)
 
 st.title("🛡️ Credos: Recuperação de Crédito Inteligente")
 
+# --- SIDEBAR: CONTROLE E IMPORTAÇÃO ---
 with st.sidebar:
     st.header("⚙️ Painel de Controle")
     empresa = st.selectbox("Selecione a Credora:", ["SERVWELD", "Centro-Oeste"])
     cnpj_credor = "11504286000169" if empresa == "SERVWELD" else "54804458000122"
+    
     st.markdown("---")
-    uploaded_file = st.file_uploader("📥 Importar PDF Itaú (Vencidos)", type="pdf")
+    st.subheader("📥 Importar Dados")
+    uploaded_file = st.file_uploader("Upload de PDF Itaú (Vencidos)", type="pdf")
     
     if uploaded_file and st.button("🚀 Processar e Sincronizar"):
-        temp_path = os.path.join("data", uploaded_file.name)
+        temp_path = os.path.join("data", f"{int(time.time())}_{uploaded_file.name}")
         if not os.path.exists("data"): os.makedirs("data")
-        with open(temp_path, "wb") as f:
-            f.write(uploaded_file.getbuffer())
-        
-        with st.spinner("Processando títulos..."):
-            dados = extrair_dados_boletos(temp_path, cnpj_credor)
-            if not dados:
-                dados = [{"nosso_numero": f"T-{int(time.time())}", "numero_nf": "101", "cnpj_cliente": "12345678000100", "razao_social": "CLIENTE TESTE S.A.", "valor": 1250.00, "vencimento": "2026-01-25"}]
             
-            mgr_sidebar = Manager(cnpj_credor)
-            alertas = mgr_sidebar.conciliar_titulos(dados)
-            salvar_dados_no_banco(dados, cnpj_credor)
-            st.session_state['ultimos_alertas'] = alertas
-            st.success("Sincronização concluída!")
-            st.rerun()
+        try:
+            with open(temp_path, "wb") as f:
+                f.write(uploaded_file.getbuffer())
+            
+            with st.status("Processando PDF...", expanded=True) as status:
+                st.write("🔍 Extraindo dados com IA...")
+                dados = extrair_dados_boletos(temp_path, cnpj_credor)
+                
+                if dados:
+                    st.write("💾 Sincronizando com Banco de Dados...")
+                    mgr_sidebar = Manager(cnpj_credor)
+                    mgr_sidebar.conciliar_titulos(dados)
+                    salvar_dados_no_banco(dados, cnpj_credor)
+                    status.update(label="✅ Sincronização concluída!", state="complete", expanded=False)
+                    st.success(f"{len(dados)} títulos importados.")
+                    time.sleep(1.5)
+                    st.rerun()
+        except Exception as e:
+            st.error(f"❌ Erro: {e}")
 
+# --- CORPO PRINCIPAL: ABAS ---
 mgr = Manager(cnpj_credor)
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📊 Cobrança", "⚠️ Conciliação", "🤝 Promessas", "📈 Dashboard", "👥 Clientes", "📲 Conexão"])
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    "📊 Cobrança", "⚠️ Conciliação", "🤝 Promessas", "📈 Dashboard", "👥 Clientes", "📲 Conexão"
+])
 
+# ABA 1: GESTÃO DE COBRANÇA
 with tab1:
-    st.subheader(f"Títulos em aberto: {empresa}")
+    st.subheader(f"Títulos em Aberto: {empresa}")
     relatorio = mgr.agrupar_debitos_por_cliente()
+    
     if not relatorio:
-        st.info("Nenhum título vencido para cobrar hoje.")
+        st.info("Nenhum título vencido encontrado.")
     else:
         for cliente, info in relatorio.items():
-            with st.expander(f"📌 {cliente} - Total: R$ {info['total']:,.2f}"):
-                if info['contato']: st.caption(f"A/C: {info['contato']}")
-                st.write("**Notas:** " + ", ".join(info['itens']))
+            # Filtro para remover duplicatas visualmente (NF 101, NF 101 -> NF 101)
+            notas_unicas = sorted(list(set(info['itens'])))
+            exp_label = f"📌 {cliente} | Dívida Total: R$ {info['total']:,.2f}"
+            
+            with st.expander(exp_label):
+                if info['contato']: st.caption(f"👤 Responsável: {info['contato']} | 📱 {info['zap']}")
+                st.write(f"**Pendências:** {', '.join(notas_unicas)}")
                 
-                # Interface de três colunas para ações rápidas
                 c1, c2, c3 = st.columns(3)
                 
-                if c1.button(f"📲 WhatsApp", key=f"btn_zap_{cliente}"):
-                    if not info['zap']: st.error("Cadastre o WhatsApp em 'Clientes'.")
-                    else:
-                        mensagem = mgr.messenger.formatar_mensagem_cobranca(cliente, info)
-                        sucesso, status = mgr.messenger.enviar_whatsapp(info['zap'], mensagem)
-                        if sucesso: st.success(status)
-                        else: st.error(status)
+                # Botão 1: WhatsApp Padrão
+                if c1.button(f"📲 WhatsApp Rápido", key=f"zap_{cliente}"):
+                    msg = mgr.messenger.formatar_mensagem_cobranca(cliente, info)
+                    sucesso, status_msg = mgr.messenger.enviar_whatsapp(info['zap'], msg)
+                    st.toast(status_msg)
 
-                if c2.button(f"📧 E-mail", key=f"btn_mail_{cliente}"):
-                    if not info['email']: st.error("Cadastre o E-mail em 'Clientes'.")
-                    else:
-                        with st.spinner("Enviando e-mail..."):
-                            sucesso, status = mgr.mailer.enviar_email_cobranca(info['email'], cliente, info)
-                            if sucesso: st.success(status)
-                            else: st.error(status)
+                # Botão 2: E-mail (HTML)
+                if c2.button(f"📧 E-mail Profissional", key=f"mail_{cliente}"):
+                    with st.spinner("Enviando e-mail..."):
+                        sucesso, status_msg = mgr.mailer.enviar_email_cobranca(info['email'], cliente, info)
+                        st.toast(status_msg)
 
+                # Botão 3: Sugerir Acordo com Gemini (Prompt Robusto)
                 if c3.button(f"🤖 Acordo IA", key=f"ai_{cliente}"):
-                    st.info("Sugestão: Parcelamento em 2x sem juros ou 5% de desconto à vista.")
+                    with st.spinner("Gemini elaborando proposta personalizada..."):
+                        # Prompt focado em negociação real
+                        query = (
+                            f"Atue como um gestor de cobrança amigável da empresa {empresa}. "
+                            f"O cliente {cliente} possui um débito total de R$ {info['total']:,.2f}. "
+                            f"As notas fiscais são: {', '.join(notas_unicas)}. "
+                            f"Escreva uma mensagem para WhatsApp curta e profissional. "
+                            f"Inicie com uma saudação, mencione os valores e pergunte se "
+                            f"podem enviar o comprovante ou se precisam de uma segunda via do boleto. "
+                            f"Seja cordial, evite termos jurídicos pesados."
+                        )
+                        st.session_state[f"prop_{cliente}"] = get_ai_response(query)
 
-with tab4:
-    st.subheader("📈 Dashboard Financeiro")
-    metricas = obter_metricas_mensais(cnpj_credor)
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Total Inadimplente", f"R$ {metricas['vencido']:,.2f}")
-    m2.metric("Total Recuperado", f"R$ {metricas['pago']:,.2f}")
-    total_geral = metricas['vencido'] + metricas['pago']
-    m3.metric("Taxa de Recuperação", f"{(metricas['pago']/total_geral*100 if total_geral>0 else 0):.1f}%")
-    st.markdown("---")
-    c_g1, c_g2 = st.columns(2)
-    with c_g1:
-        if total_geral > 0:
-            st.bar_chart(pd.DataFrame({"Valor": [metricas['vencido'], metricas['pago']]}, index=["Aberto", "Pago"]))
-    with c_g2:
-        df_ranking = obter_ranking_devedores(cnpj_credor)
-        if not df_ranking.empty: st.bar_chart(df_ranking.set_index("Cliente"))
+                # Área de Revisão da IA (Só aparece se a IA for acionada)
+                if f"prop_{cliente}" in st.session_state:
+                    st.markdown("---")
+                    st.info("💡 **Proposta sugerida pela IA (Você pode editar antes de enviar):**")
+                    proposta_editavel = st.text_area(
+                        "Mensagem da IA:", 
+                        value=st.session_state[f"prop_{cliente}"],
+                        height=180,
+                        key=f"area_{cliente}"
+                    )
+                    
+                    col_env, col_can = st.columns([2, 1])
+                    if col_env.button("🚀 Disparar Proposta", key=f"send_ai_{cliente}", type="primary"):
+                        sucesso, status_msg = mgr.messenger.enviar_whatsapp(info['zap'], proposta_editavel)
+                        if sucesso:
+                            st.success("Enviado com sucesso!")
+                            del st.session_state[f"prop_{cliente}"]
+                            st.rerun()
+                        else:
+                            st.error(status_msg)
+                    
+                    if col_can.button("Cancelar", key=f"cancel_{cliente}"):
+                        del st.session_state[f"prop_{cliente}"]
+                        st.rerun()
 
-with tab5:
-    st.subheader("👥 Gestão de Contatos")
-    conn = get_connection()
-    df_clientes = pd.read_sql_query("SELECT * FROM clientes", conn)
-    df_editado = st.data_editor(df_clientes, width="stretch", hide_index=True)
-    if st.button("💾 Salvar Alterações"):
-        cursor = conn.cursor()
-        for _, row in df_editado.iterrows():
-            cursor.execute("UPDATE clientes SET contato = ?, whatsapp = ?, email = ? WHERE cnpj_cpf = ?", 
-                           (row['contato'], row['whatsapp'], row['email'], row['cnpj_cpf']))
-        conn.commit()
-        st.success("Contatos atualizados!")
-    conn.close()
-
+# ABA 6: CONEXÃO (EVOLUTION API)
 with tab6:
-    st.subheader("📲 Conexão WhatsApp")
-    
-    # Puxa do .env (conforme sua preferência salva)
-    api_url = os.getenv("WHATSAPP_API_URL", "http://localhost:8081")
-    api_key = os.getenv("WHATSAPP_API_TOKEN", "42a24fa6-403d-4c7b-b30a-9359e9a4f783")
-    instancia = "Credos_Bot"
+    st.subheader("📲 Configuração do WhatsApp")
+    url = os.getenv("SERVER_URL")
+    key = os.getenv("AUTHENTICATION_API_KEY")
+    inst = os.getenv("INSTANCE_NAME")
 
-    if st.button("🔄 Gerar QR Code"):
-        try:
-            headers = {"apikey": api_key}
-            # Tenta criar a instância primeiro
-            requests.post(f"{api_url}/instance/create", 
-                         json={"instanceName": instancia}, 
-                         headers=headers)
-            
-            # Busca o QR Code
-            res = requests.get(f"{api_url}/instance/connect/{instancia}", headers=headers)
-            
-            if res.status_code == 200:
-                data = res.json()
-                if "base64" in data:
-                    st.image(data["base64"], caption="Escaneie para conectar")
-                else:
-                    st.success("✅ Aparelho já está conectado!")
-            else:
-                st.error("Erro ao obter QR Code. Verifique se a instância foi criada.")
-        except Exception as e:
-            st.error(f"Falha ao conectar com a API: {e}")
+    st.write(f"Conectando em: `{url}` | Instância: `{inst}`")
+    
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("📊 Verificar API"):
+            try:
+                res = requests.get(f"{url}/instance/fetchInstances", headers={"apikey": key}, timeout=5)
+                if res.status_code == 200: st.success("🟢 Comunicação OK!")
+                else: st.error(f"🔴 Erro {res.status_code}: Verifique a API Key.")
+            except: st.error("🔴 Servidor Offline.")
+
+    with c2:
+        if st.button("🔄 Criar / Gerar QR Code"):
+            headers = {"apikey": key, "Content-Type": "application/json"}
+            requests.post(f"{url}/instance/create", json={"instanceName": inst, "qrcode": True}, headers=headers)
+            res = requests.get(f"{url}/instance/connect/{inst}", headers=headers)
+            if res.status_code == 200 and "base64" in res.json():
+                st.image(res.json()["base64"], caption="Escaneie para conectar")
+            else: st.info("Instância já ativa ou conectada.")
