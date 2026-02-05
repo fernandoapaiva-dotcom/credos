@@ -1,66 +1,126 @@
 import requests
+import base64
 import os
-from dotenv import load_dotenv
+import mimetypes
 
 class EvolutionController:
-    def __init__(self, config=None):
-        # Carrega o .env da raiz do projeto
-        load_dotenv()
-        
-        # Mapeando para os nomes EXATOS que você enviou no seu .env
-        self.base_url = os.getenv("SERVER_URL") # Antes era EVO_URL
-        self.global_key = os.getenv("AUTHENTICATION_API_KEY") # Antes era EVO_KEY
-        
-        # Fallback caso o .env não seja lido (usando o que está no banco de dados)
-        if not self.base_url and config:
-            self.base_url = config.get("evo_url")
-        if not self.global_key and config:
-            self.global_key = config.get("evo_key")
+    def __init__(self, config):
+        url_raw = os.getenv('EVO_API_URL') or config.get('evo_url') or ''
+        key_raw = os.getenv('EVO_GLOBAL_KEY') or config.get('evo_key') or ''
+        # Forçamos um nome sem espaços ou caracteres especiais para evitar Bad Request
+        inst_raw = os.getenv('EVO_INSTANCE_NAME') or "Credos_SaaS"
 
-        # Limpeza da URL para evitar erros de concatenação
-        if self.base_url:
-            self.base_url = self.base_url.strip("/")
-            if not self.base_url.startswith("http"):
-                self.base_url = f"http://{self.base_url}"
-
-        # Nome da instância para o cliente atual
-        cnpj_limpo = config.get('empresa_cnpj', 'temp').replace(".", "").replace("/", "").replace("-", "") if config else "temp"
-        self.instance_name = f"c_{cnpj_limpo}"
-
-    def criar_instancia_automatica(self, cnpj):
-        """Usa a Global Key para criar uma instância exclusiva para o cliente."""
-        if not self.base_url or not self.global_key:
-            return None, "Configuração SERVER_URL ou AUTHENTICATION_API_KEY ausente no .env"
-
-        name = f"c_{cnpj}".replace(".", "").replace("/", "").replace("-", "")
-        headers = {"apikey": self.global_key}
-        
-        payload = {
-            "instanceName": name,
-            "token": f"tk_{name}", 
-            "qrcode": True
-        }
-        
-        try:
-            url_final = f"{self.base_url}/instance/create"
-            response = requests.post(url_final, json=payload, headers=headers, timeout=15)
+        self.url = url_raw.strip().rstrip('/')
+        if self.url and not self.url.startswith('http'):
+            self.url = 'http://' + self.url
             
-            # 201 = Criado, 400 = Já existe (o que também é bom para nós)
-            if response.status_code in [201, 200, 400]:
-                return payload["token"], None
-            else:
-                return None, f"Erro {response.status_code}: {response.text}"
-        except Exception as e:
-            return None, f"Falha na requisição: {str(e)}"
+        self.apikey = key_raw.strip()
+        self.instance = inst_raw.strip().replace(" ", "_") # Proteção contra espaços
+        
+        self.headers = {
+            "apikey": self.apikey,
+            "Content-Type": "application/json"
+        }
 
-    def gerenciar_instancia(self):
-        """Busca o QR Code da instância do cliente."""
-        headers = {"apikey": self.global_key} 
+    def debug_log(self, acao, endpoint, resposta, payload=None):
+        print(f"\n--- 🕵️ RASTREIO EVOLUTION ({acao}) ---")
+        print(f"URL: {endpoint}")
+        if payload: print(f"Payload Enviado: {payload if 'media' not in str(payload) else 'Mídia (Base64 Omitido)'}")
+        print(f"Status Code: {resposta.status_code}")
+        print(f"Resposta do Servidor: {resposta.text}")
+        print("-" * 40 + "\n")
+
+    def checar_status(self):
         try:
-            # Endpoint para conectar e obter QR Code
-            url_qr = f"{self.base_url}/instance/connect/{self.instance_name}"
-            res = requests.get(url_qr, headers=headers, timeout=15)
-            return res.json().get("base64"), self.instance_name
+            if not self.url or not self.apikey: return None
+            endpoint = f"{self.url}/instance/connectionState/{self.instance}"
+            r = requests.get(endpoint, headers=self.headers, timeout=5)
+            if r.status_code != 200: self.debug_log("Checar Status", endpoint, r)
+            if r.status_code == 200: return r.json()
+            return {"status": r.status_code}
+        except: return None
+
+    def criar_instancia(self):
+        try:
+            endpoint = f"{self.url}/instance/create"
+            payload = {"instanceName": self.instance, "qrcode": True}
+            r = requests.post(endpoint, json=payload, headers=self.headers, timeout=10)
+            if r.status_code not in [200, 201]: self.debug_log("Erro ao Criar", endpoint, r)
+            return r.json()
         except Exception as e:
-            print(f"Erro ao buscar QR Code: {e}")
-            return None, None
+            return {"error": str(e)}
+    
+    def deletar_instancia(self):
+        """Remove a instância do servidor para permitir recriação limpa"""
+        try:
+            endpoint = f"{self.url}/instance/delete/{self.instance}"
+            r = requests.delete(endpoint, headers=self.headers, timeout=10)
+            if r.status_code not in [200, 201]: self.debug_log("Erro ao Deletar", endpoint, r)
+            return r.status_code in [200, 201]
+        except Exception as e:
+            print(f"Erro ao deletar: {e}")
+            return False
+
+    def buscar_qrcode(self):
+        try:
+            endpoint = f"{self.url}/instance/connect/{self.instance}"
+            r = requests.get(endpoint, headers=self.headers, timeout=10)
+            return r.json() if r.status_code == 200 else {"error": r.text}
+        except: return None
+
+    def enviar_mensagem_texto(self, numero, mensagem):
+        try:
+            target = "".join(filter(str.isdigit, str(numero)))
+            if len(target) <= 11: target = "55" + target
+            
+            endpoint = f"{self.url}/message/sendText/{self.instance}"
+            
+            payload = {
+                "number": target,
+                "text": mensagem,
+                "delay": 1200,
+                "linkPreview": False
+            }
+            
+            r = requests.post(endpoint, json=payload, headers=self.headers)
+            
+            if r.status_code not in [200, 201]:
+                self.debug_log("FALHA ENVIO TEXTO", endpoint, r, payload)
+                return False
+            return True
+        except Exception as e:
+            print(f"Erro Crítico WhatsApp Texto: {e}")
+            return False
+
+    def enviar_midia(self, numero, caminho):
+        try:
+            target = "".join(filter(str.isdigit, str(numero)))
+            if len(target) <= 11: target = "55" + target
+            
+            if not os.path.exists(caminho):
+                print(f"❌ Erro: Arquivo {caminho} não encontrado.")
+                return False
+
+            with open(caminho, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode('utf-8')
+            
+            endpoint = f"{self.url}/message/sendMedia/{self.instance}"
+            filename = os.path.basename(caminho)
+            
+            payload = {
+                "number": target,
+                "media": b64,
+                "mediatype": "document",
+                "fileName": filename,
+                "caption": filename
+            }
+            
+            r = requests.post(endpoint, json=payload, headers=self.headers)
+            
+            if r.status_code not in [200, 201]:
+                self.debug_log("FALHA ENVIO MÍDIA", endpoint, r, {"number": target, "file": filename})
+                return False
+            return True
+        except Exception as e:
+            print(f"Erro Crítico WhatsApp Mídia: {e}")
+            return False
