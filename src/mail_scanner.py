@@ -48,10 +48,25 @@ class MailScanner:
             if status == "OK":
                 todas = [f.decode() for f in folders]
                 for p in pastas_comuns:
+                    # Tenta casar o nome da pasta
+                    p_clean = p.replace('"', '')
                     for t in todas:
-                        if p.replace('"', '') in t: pastas_provaveis.append(t.split(' "/" ')[-1] if ' "/" ' in t else t)
+                        if p_clean in t: 
+                            # Pega o nome exato retornado pelo servidor
+                            nome_real = t.split(' "/" ')[-1] if ' "/" ' in t else t
+                            # Remove aspas extras se vierem no split
+                            nome_real = nome_real.replace('"', '')
+                            if 'Gmail' in t: # Ajuste específico para Gmail que retorna com aspas
+                                nome_real = t.split(') "')[1].split('" "')[-1].replace('"', '')
+
+                            # Simplificação: se não conseguir parsear, usa o nome bruto
+                            pastas_provaveis.append(nome_real if nome_real else t)
         except: pass
-        if not pastas_provaveis: pastas_provaveis = ['INBOX']
+        
+        # Fallback manual se a detecção falhar
+        if not pastas_provaveis: 
+            pastas_provaveis = ['"[Gmail]/E-mails enviados"', 'Sent', 'INBOX']
+            
         return list(set(pastas_provaveis))
 
     def baixar_anexos_por_nf(self, numero_nf):
@@ -62,18 +77,23 @@ class MailScanner:
         nf_str = str(numero_nf).strip()
         
         try:
-            pastas = self._obter_pastas_busca(mail)
+            # Lista fixa de tentativas para garantir, além da detecção
+            pastas = ['"[Gmail]/E-mails enviados"', 'Sent', 'INBOX']
+            
             encontrou = False
             for pasta in pastas:
                 if encontrou: break
                 try:
-                    mail.select(pasta)
-                    # Busca otimizada
+                    status, _ = mail.select(pasta)
+                    if status != "OK": continue
+
+                    # Busca otimizada pelo Assunto
                     status, messages = mail.search(None, f'(SUBJECT "{nf_str}")')
                     if status != "OK" or not messages[0]: continue
 
                     ids = messages[0].split()
-                    for e_id in reversed(ids[-3:]): # Olha só os 3 últimos
+                    # Pega os 3 últimos e-mails encontrados
+                    for e_id in reversed(ids[-3:]): 
                         if encontrou: break
                         _, msg_data = mail.fetch(e_id, "(RFC822)")
                         for response_part in msg_data:
@@ -103,3 +123,13 @@ class MailScanner:
 
     def testar_busca_manual(self, pasta, termo):
         return "Função de teste simplificada."
+
+# --- FUNÇÃO REINSERIDA PARA CORRIGIR O ERRO ---
+def conectar_email(u, p, s):
+    try:
+        if not u or not p or not s: return False, "Dados incompletos"
+        m = imaplib.IMAP4_SSL(s)
+        m.login(u, p)
+        m.logout()
+        return True, "Conectado com sucesso"
+    except Exception as e: return False, str(e)
