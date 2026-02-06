@@ -2,7 +2,8 @@ import imaplib
 import email
 from email.header import decode_header
 import os
-import shutil
+import re
+import pdfplumber  # Necessário para ler o PDF
 
 class MailScanner:
     def __init__(self, config):
@@ -10,126 +11,191 @@ class MailScanner:
         self.password = config.get('mail_base_pass')
         self.server = config.get('imap_server')
         
-        # --- ORGANIZAÇÃO DE PASTAS ---
         self.base_temp = "temp_data"
         self.pasta_destino = os.path.join(self.base_temp, "attachments")
-        
-        if not os.path.exists(self.pasta_destino):
-            os.makedirs(self.pasta_destino)
+        if not os.path.exists(self.pasta_destino): os.makedirs(self.pasta_destino)
 
     def _conectar(self):
         try:
-            if not self.user or not self.password or not self.server:
-                return None
+            if not self.user or not self.password or not self.server: return None
             mail = imaplib.IMAP4_SSL(self.server)
             mail.login(self.user, self.password)
             return mail
         except Exception as e:
-            print(f"❌ Erro ao conectar no IMAP: {e}")
+            print(f"❌ Erro Conexão IMAP: {e}")
             return None
 
-    def limpar_assunto(self, subject):
-        if not subject: return "sem_assunto"
-        decoded_list = decode_header(subject)
-        assunto_limpo = ""
-        for decoded_bytes, charset in decoded_list:
-            if isinstance(decoded_bytes, bytes):
-                assunto_limpo += decoded_bytes.decode(charset or 'utf-8', errors='ignore')
-            else:
-                assunto_limpo += str(decoded_bytes)
-        # Limpa caracteres inválidos para nome de arquivo
-        return "".join([c for c in assunto_limpo if c.isalnum() or c in (' ', '.', '_', '-')]).strip()
-
-    def _obter_pastas_busca(self, mail):
-        pastas_provaveis = []
-        pastas_comuns = ['"[Gmail]/E-mails enviados"', '"[Gmail]/Sent Mail"', 'Sent', '"Itens Enviados"', 'INBOX']
+    def limpar_nome_arquivo(self, filename):
+        if not filename: return "anexo_desconhecido"
         try:
-            status, folders = mail.list()
-            if status == "OK":
-                todas = [f.decode() for f in folders]
-                for p in pastas_comuns:
-                    # Tenta casar o nome da pasta
-                    p_clean = p.replace('"', '')
-                    for t in todas:
-                        if p_clean in t: 
-                            # Pega o nome exato retornado pelo servidor
-                            nome_real = t.split(' "/" ')[-1] if ' "/" ' in t else t
-                            # Remove aspas extras se vierem no split
-                            nome_real = nome_real.replace('"', '')
-                            if 'Gmail' in t: # Ajuste específico para Gmail que retorna com aspas
-                                nome_real = t.split(') "')[1].split('" "')[-1].replace('"', '')
+            decoded_list = decode_header(filename)
+            nome_limpo = ""
+            for decoded_bytes, charset in decoded_list:
+                if isinstance(decoded_bytes, bytes):
+                    nome_limpo += decoded_bytes.decode(charset or 'utf-8', errors='ignore')
+                else:
+                    nome_limpo += str(decoded_bytes)
+            return "".join([c for c in nome_limpo if c.isalnum() or c in (' ', '.', '_', '-')]).strip()
+        except: return "anexo_erro_decode"
 
-                            # Simplificação: se não conseguir parsear, usa o nome bruto
-                            pastas_provaveis.append(nome_real if nome_real else t)
+    def _selecionar_pasta_segura(self, mail, nome_pasta):
+        try:
+            status, _ = mail.select(f'"{nome_pasta}"')
+            if status == "OK": return True
         except: pass
-        
-        # Fallback manual se a detecção falhar
-        if not pastas_provaveis: 
-            pastas_provaveis = ['"[Gmail]/E-mails enviados"', 'Sent', 'INBOX']
-            
-        return list(set(pastas_provaveis))
+        try:
+            status, _ = mail.select(nome_pasta)
+            if status == "OK": return True
+        except: pass
+        return False
 
-    def baixar_anexos_por_nf(self, numero_nf):
+    def _extrair_texto_arquivo(self, filepath):
+        """Lê o conteúdo de texto de PDFs ou XMLs"""
+        texto_completo = ""
+        try:
+            if filepath.lower().endswith('.pdf'):
+                with pdfplumber.open(filepath) as pdf:
+                    for page in pdf.pages:
+                        texto = page.extract_text()
+                        if texto: texto_completo += texto
+            elif filepath.lower().endswith('.xml'):
+                with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                    texto_completo = f.read()
+            # Se for outro formato (zip/boleto sem extensão), não conseguimos ler fácil, 
+            # então retornamos vazio e confiamos na validação manual se necessário
+        except Exception as e:
+            print(f"Erro lendo arquivo {filepath}: {e}")
+        
+        return texto_completo
+
+    def validar_arquivo_pertence_cliente(self, filepath, cnpj_alvo, nome_alvo):
+        """
+        Retorna TRUE se encontrar o CNPJ ou parte do NOME no arquivo.
+        Retorna FALSE se não encontrar nada.
+        """
+        texto = self._extrair_texto_arquivo(filepath)
+        
+        # Se não conseguiu ler texto (ex: imagem escaneada), infelizmente não dá pra validar.
+        # Nesse caso, por segurança, podemos REJEITAR ou APROVAR com risco.
+        # Aqui vamos REJEITAR para garantir que não mande errado.
+        if not texto:
+            print(f"   ⚠️ Arquivo ilegível (imagem ou protegido): {os.path.basename(filepath)}")
+            return False 
+
+        # Normaliza textos para comparação (remove pontuação)
+        texto_limpo = re.sub(r'\D', '', texto) # Só números para CNPJ
+        texto_upper = texto.upper() # Maiúsculo para Nome
+        
+        # 1. Validação por CNPJ (A mais forte)
+        if cnpj_alvo:
+            cnpj_limpo = re.sub(r'\D', '', str(cnpj_alvo))
+            if cnpj_limpo and len(cnpj_limpo) > 5: # Evita match com cnpj vazio
+                if cnpj_limpo in texto_limpo:
+                    print(f"   ✅ Validação CNPJ OK: {cnpj_limpo}")
+                    return True
+
+        # 2. Validação por Nome (Fuzzy)
+        if nome_alvo:
+            # Pega as 2 primeiras palavras do nome da empresa (Ex: "SWS ESQUADRIA" -> "SWS ESQUADRIA")
+            partes_nome = nome_alvo.upper().split()[:2] 
+            nome_curto = " ".join(partes_nome)
+            
+            if nome_curto in texto_upper:
+                print(f"   ✅ Validação Nome OK: {nome_curto}")
+                return True
+
+        print(f"   ❌ Validação Falhou: Não achei CNPJ nem Nome no arquivo.")
+        return False
+
+    def baixar_anexos_por_nf_validado(self, numero_nf, cnpj_cliente, nome_cliente):
         mail = self._conectar()
         if not mail: return []
 
         arquivos_baixados = []
         nf_str = str(numero_nf).strip()
+        nf_sem_zero = str(int(nf_str)) if nf_str.isdigit() else nf_str
         
+        pastas_candidatas = [
+            '[Gmail]/E-mails enviados', '[Gmail]/Sent Mail', '[Gmail]/Todos os e-mails', '[Gmail]/All Mail',
+            'Enviados', 'Itens Enviados', 'Sent', 'Sent Items', 'INBOX'
+        ]
+
         try:
-            # Lista fixa de tentativas para garantir, além da detecção
-            pastas = ['"[Gmail]/E-mails enviados"', 'Sent', 'INBOX']
+            _, folders = mail.list()
+            pastas_reais = []
+            for f in folders:
+                decoded = f.decode()
+                if '"/"' in decoded: parte_nome = decoded.split('"/"')[-1].strip().replace('"', '')
+                else: parte_nome = decoded.split()[-1].strip().replace('"', '')
+                pastas_reais.append(parte_nome)
+                pastas_reais.append(decoded)
+            todas_pastas = list(set(pastas_candidatas + pastas_reais))
             
-            encontrou = False
-            for pasta in pastas:
-                if encontrou: break
-                try:
-                    status, _ = mail.select(pasta)
-                    if status != "OK": continue
+            print(f"🔍 Procurando NF {nf_str}...") 
 
-                    # Busca otimizada pelo Assunto
-                    status, messages = mail.search(None, f'(SUBJECT "{nf_str}")')
-                    if status != "OK" or not messages[0]: continue
+            for pasta in todas_pastas:
+                if arquivos_baixados: break 
+                if any(x in pasta.lower() for x in ['spam', 'trash', 'lixeira', 'drafts']): continue
 
-                    ids = messages[0].split()
-                    # Pega os 3 últimos e-mails encontrados
-                    for e_id in reversed(ids[-3:]): 
-                        if encontrou: break
-                        _, msg_data = mail.fetch(e_id, "(RFC822)")
-                        for response_part in msg_data:
-                            if isinstance(response_part, tuple):
-                                msg = email.message_from_bytes(response_part[1])
-                                for part in msg.walk():
-                                    if part.get_content_maintype() == 'multipart' or part.get('Content-Disposition') is None: continue
-                                    fname = part.get_filename()
-                                    if fname and '.pdf' in fname.lower():
-                                        fname = self.limpar_assunto(fname)
-                                        fpath = os.path.join(self.pasta_destino, f"{nf_str}_{fname}")
-                                        with open(fpath, "wb") as f: f.write(part.get_payload(decode=True))
-                                        arquivos_baixados.append(fpath)
-                                        encontrou = True
-                except: continue
+                if not self._selecionar_pasta_segura(mail, pasta): continue
+
+                ids = []
+                typ, data = mail.search(None, f'(SUBJECT "{nf_str}")')
+                if data[0]: ids.extend(data[0].split())
+                
+                if not ids and nf_str != nf_sem_zero:
+                    typ, data = mail.search(None, f'(SUBJECT "{nf_sem_zero}")')
+                    if data[0]: ids.extend(data[0].split())
+
+                if not ids:
+                     typ, data = mail.search(None, f'(BODY "{nf_str}")')
+                     if data[0]: ids.extend(data[0].split())
+
+                ids = sorted(list(set(ids)), reverse=True)[:3]
+                
+                for e_id in ids:
+                    _, msg_data = mail.fetch(e_id, "(RFC822)")
+                    for response_part in msg_data:
+                        if isinstance(response_part, tuple):
+                            msg = email.message_from_bytes(response_part[1])
+                            
+                            for part in msg.walk():
+                                if part.get_content_maintype() == 'multipart' or part.get('Content-Disposition') is None: continue
+                                
+                                fname = part.get_filename()
+                                if fname:
+                                    fname_lower = fname.lower()
+                                    if any(ext in fname_lower for ext in ['.pdf', '.xml', '.boleto', '.zip']):
+                                        fname_clean = self.limpar_nome_arquivo(fname)
+                                        fpath = os.path.join(self.pasta_destino, f"{nf_str}_{fname_clean}")
+                                        
+                                        with open(fpath, "wb") as f:
+                                            f.write(part.get_payload(decode=True))
+                                        
+                                        # --- AQUI ENTRA A VALIDAÇÃO ---
+                                        if fpath.endswith('.zip'):
+                                            arquivos_baixados.append(fpath)
+                                        else:
+                                            eh_valido = self.validar_arquivo_pertence_cliente(fpath, cnpj_cliente, nome_cliente)
+                                            if eh_valido:
+                                                arquivos_baixados.append(fpath)
+                                            else:
+                                                # Tenta remover se não for válido
+                                                try: os.remove(fpath)
+                                                except: pass
+
             mail.close()
             mail.logout()
-        except: pass
-        return arquivos_baixados
+        except Exception as e:
+            print(f"Erro Scanner: {e}")
+        
+        return list(set(arquivos_baixados))
 
-    def listar_pastas_debug(self):
-        mail = self._conectar()
-        if not mail: return []
-        _, folders = mail.list()
-        mail.logout()
-        return [f.decode() for f in folders] if folders else []
-
-    def testar_busca_manual(self, pasta, termo):
-        return "Função de teste simplificada."
-
-# --- FUNÇÃO REINSERIDA PARA CORRIGIR O ERRO ---
+# --- FUNÇÃO INDIVIDUAL NECESSÁRIA PARA O APP.PY ---
 def conectar_email(u, p, s):
     try:
-        if not u or not p or not s: return False, "Dados incompletos"
         m = imaplib.IMAP4_SSL(s)
         m.login(u, p)
         m.logout()
-        return True, "Conectado com sucesso"
+        return True, "OK"
     except Exception as e: return False, str(e)
