@@ -1,0 +1,12 @@
+google-genai
+python-dotenv
+pandas
+streamlit
+streamlit-option-menu
+fpdf
+requests
+bcrypt
+schedule
+holidays
+pdfplumber
+openpyxl

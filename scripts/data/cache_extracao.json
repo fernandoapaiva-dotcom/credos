@@ -1,0 +1,30 @@
+[
+    {
+        "vencimento": "2025-10-06",
+        "nota_fiscal": "912",
+        "valor": 1793.66,
+        "pagador": "SWS ESQUADRIA DE ALUMINIO COME",
+        "nosso_numero": "000028882"
+    },
+    {
+        "vencimento": "2025-10-07",
+        "nota_fiscal": "913",
+        "valor": 820.89,
+        "pagador": "SWS ESQUADRIA DE ALUMINIO COME",
+        "nosso_numero": "000028890"
+    },
+    {
+        "vencimento": "2025-10-08",
+        "nota_fiscal": "202",
+        "valor": 120.00,
+        "pagador": "GND ELETROBOMBAS COMERCIO E RE",
+        "nosso_numero": "000028973"
+    },
+    {
+        "vencimento": "2025-10-23",
+        "nota_fiscal": "853-33",
+        "valor": 4227.81,
+        "pagador": "LK AGROPECUARIA E TRANSPORTADO",
+        "nosso_numero": "000028064"
+    }
+]

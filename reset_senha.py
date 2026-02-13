@@ -1,44 +1,42 @@
 import sqlite3
-import bcrypt
 
-# Nome do banco de dados
+# Nome do banco
 DB_NAME = "credos_data.db"
 
-def resetar_admin():
-    print("🔄 Conectando ao banco de dados...")
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
+def ajustar_admin():
+    print(f"🔌 Conectando ao banco {DB_NAME}...")
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        
+        # 1. Tenta buscar pelo padrão novo 'login'
+        # Se der erro aqui, é porque o banco não foi resetado com o script anterior
+        try:
+            existe = cursor.execute("SELECT * FROM usuarios WHERE login='admin'").fetchone()
+            
+            if existe:
+                # 🔄 RESET DE SENHA: Força a senha para '123' no padrão novo
+                cursor.execute("UPDATE usuarios SET senha='123' WHERE login='admin'")
+                conn.commit()
+                print("✅ Senha do 'admin' resetada para: 123")
+            else:
+                # ✨ CRIAÇÃO: Insere o admin se ele não existir
+                cursor.execute("INSERT INTO usuarios (login, senha, nome_completo, perfil) VALUES ('admin', '123', 'Administrador', 'admin')")
+                conn.commit()
+                print("✅ Usuário 'admin' criado do zero.")
+                
+            print("👤 Login: admin | 🔑 Senha: 123")
 
-    # Garante que a tabela existe (caso tenha sido apagada)
-    c.execute('''CREATE TABLE IF NOT EXISTS usuarios (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT UNIQUE,
-        password_hash TEXT
-    )''')
-
-    # Define o usuário e senha de resgate
-    usuario = "admin"
-    nova_senha = "123"  # <--- SUA NOVA SENHA AQUI
-
-    # Criptografa a senha (gera o Hash)
-    hashed = bcrypt.hashpw(nova_senha.encode(), bcrypt.gensalt()).decode()
-
-    # Verifica se o usuário já existe
-    c.execute("SELECT id FROM usuarios WHERE username = ?", (usuario,))
-    existe = c.fetchone()
-
-    if existe:
-        print(f"⚠️ Usuário '{usuario}' encontrado. Atualizando senha...")
-        c.execute("UPDATE usuarios SET password_hash = ? WHERE username = ?", (hashed, usuario))
-    else:
-        print(f"➕ Usuário '{usuario}' não existia. Criando agora...")
-        c.execute("INSERT INTO usuarios (username, password_hash) VALUES (?, ?)", (usuario, hashed))
-
-    conn.commit()
-    conn.close()
-    print(f"✅ SUCESSO! Login liberado.")
-    print(f"👤 Usuário: {usuario}")
-    print(f"🔑 Senha: {nova_senha}")
+        except sqlite3.OperationalError as e:
+            if "no such column: login" in str(e):
+                print("❌ Erro: O banco ainda usa 'username'. Rode o script de RESET_BANCO primeiro!")
+            else:
+                print(f"❌ Erro operacional: {e}")
+            
+        conn.close()
+        
+    except Exception as e:
+        print(f"❌ Erro geral: {e}")
 
 if __name__ == "__main__":
-    resetar_admin()
+    ajustar_admin()

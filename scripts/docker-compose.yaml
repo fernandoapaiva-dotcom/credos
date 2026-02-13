@@ -1,0 +1,31 @@
+services:
+  evolution_db:
+    image: postgres:15
+    container_name: evolution_db
+    restart: always
+    environment:
+      POSTGRES_USER: evolution_user
+      POSTGRES_PASSWORD: evolution_password
+      POSTGRES_DB: evolution_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - evolution_postgres_data:/var/lib/postgresql/data
+    networks:
+      - evolution_network
+
+  evolution_redis:
+    image: redis:7-alpine
+    container_name: evolution_redis
+    restart: always
+    ports:
+      - "6379:6379"
+    networks:
+      - evolution_network
+
+networks:
+  evolution_network:
+    driver: bridge
+
+volumes:
+  evolution_postgres_data:
