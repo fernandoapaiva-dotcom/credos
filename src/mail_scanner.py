@@ -7,15 +7,15 @@ import pdfplumber  # Necessário para ler o PDF
 
 class MailScanner:
     def __init__(self, config):
-        self.user = config.get('mail_base_user')
-        self.password = config.get('mail_base_pass')
+        self.user = config.get('mail_user')
+        self.password = config.get('mail_pass')
         self.server = config.get('imap_server')
         
         self.base_temp = "temp_data"
         self.pasta_destino = os.path.join(self.base_temp, "attachments")
         if not os.path.exists(self.pasta_destino): os.makedirs(self.pasta_destino)
 
-    def _conectar(self):
+    def conectar(self):
         try:
             if not self.user or not self.password or not self.server: return None
             mail = imaplib.IMAP4_SSL(self.server)
@@ -68,47 +68,67 @@ class MailScanner:
         
         return texto_completo
 
-    def validar_arquivo_pertence_cliente(self, filepath, cnpj_alvo, nome_alvo):
+    def validar_arquivo_pertence_cliente(self, filepath, cnpj_alvo, nome_alvo, vencimento_alvo=None, valor_alvo=None):
         """
         Retorna TRUE se encontrar o CNPJ ou parte do NOME no arquivo.
-        Retorna FALSE se não encontrar nada.
+        Também valida Vencimento e Valor se fornecidos.
         """
         texto = self._extrair_texto_arquivo(filepath)
         
-        # Se não conseguiu ler texto (ex: imagem escaneada), infelizmente não dá pra validar.
-        # Nesse caso, por segurança, podemos REJEITAR ou APROVAR com risco.
-        # Aqui vamos REJEITAR para garantir que não mande errado.
         if not texto:
             print(f"   ⚠️ Arquivo ilegível (imagem ou protegido): {os.path.basename(filepath)}")
             return False 
 
-        # Normaliza textos para comparação (remove pontuação)
+        # Normaliza textos para comparação
         texto_limpo = re.sub(r'\D', '', texto) # Só números para CNPJ
         texto_upper = texto.upper() # Maiúsculo para Nome
         
-        # 1. Validação por CNPJ (A mais forte)
-        if cnpj_alvo:
-            cnpj_limpo = re.sub(r'\D', '', str(cnpj_alvo))
-            if cnpj_limpo and len(cnpj_limpo) > 5: # Evita match com cnpj vazio
-                if cnpj_limpo in texto_limpo:
-                    print(f"   ✅ Validação CNPJ OK: {cnpj_limpo}")
-                    return True
+        matches = 0
+        checks = 0
 
-        # 2. Validação por Nome (Fuzzy)
+        # 1. Validação por CNPJ
+        if cnpj_alvo:
+            checks += 1
+            cnpj_limpo = re.sub(r'\D', '', str(cnpj_alvo))
+            if cnpj_limpo and len(cnpj_limpo) > 5:
+                if cnpj_limpo in texto_limpo:
+                    matches += 1
+                    print(f"   ✅ CNPJ OK")
+
+        # 2. Validação por Nome
         if nome_alvo:
-            # Pega as 2 primeiras palavras do nome da empresa (Ex: "SWS ESQUADRIA" -> "SWS ESQUADRIA")
+            checks += 1
             partes_nome = nome_alvo.upper().split()[:2] 
             nome_curto = " ".join(partes_nome)
-            
             if nome_curto in texto_upper:
-                print(f"   ✅ Validação Nome OK: {nome_curto}")
-                return True
+                matches += 1
+                print(f"   ✅ Nome OK")
 
-        print(f"   ❌ Validação Falhou: Não achei CNPJ nem Nome no arquivo.")
-        return False
+        # 3. Validação por Vencimento
+        if vencimento_alvo:
+            checks += 1
+            # Tenta vários formatos: DD/MM/YYYY, DD.MM.YYYY, YYYY-MM-DD
+            venc_fmt = str(vencimento_alvo).replace('-', '/').replace('.', '/')
+            if venc_fmt in texto or vencimento_alvo in texto:
+                matches += 1
+                print(f"   ✅ Vencimento OK")
 
-    def baixar_anexos_por_nf_validado(self, numero_nf, cnpj_cliente, nome_cliente):
-        mail = self._conectar()
+        # 4. Validação por Valor
+        if valor_alvo:
+            checks += 1
+            valor_str = f"{valor_alvo:,.2f}".replace('.', '#').replace(',', '.').replace('#', ',') # Padrao PT-BR
+            if valor_str in texto or f"{valor_alvo:.2f}" in texto:
+                matches += 1
+                print(f"   ✅ Valor OK")
+
+        # Se bateu o CNPJ já é suficiente, ou se bateu pelo menos 2 critérios
+        if cnpj_alvo and (re.sub(r'\D', '', str(cnpj_alvo)) in texto_limpo):
+            return True
+        
+        return matches >= 2
+
+    def baixar_anexos_por_nf_validado(self, numero_nf, cnpj_cliente, nome_cliente, vencimento=None, valor=None):
+        mail = self.conectar()
         if not mail: return []
 
         arquivos_baixados = []

@@ -119,8 +119,8 @@ if st.session_state.get('logged_in'):
 conf = st.session_state.get('config', {})
 
 # Sobrescreve com ENV se existir (Segurança)
-if os.getenv("EVO_API_URL"): st.session_state.config['evo_url'] = os.getenv("EVO_API_URL")
-if os.getenv("EVO_GLOBAL_KEY"): st.session_state.config['evo_key'] = os.getenv("EVO_GLOBAL_KEY")
+if os.getenv("SERVER_URL"): st.session_state.config['evo_url'] = os.getenv("SERVER_URL")
+if os.getenv("AUTHENTICATION_API_KEY"): st.session_state.config['evo_key'] = os.getenv("AUTHENTICATION_API_KEY")
 if os.getenv("GEMINI_API_KEY"): st.session_state.config['gemini_api_key'] = os.getenv("GEMINI_API_KEY")
 
 mgr = Manager(conf['empresa_cnpj']) if conf.get('empresa_cnpj') else None
@@ -275,48 +275,291 @@ if selected == "Operacional":
                 if df_bruto is not None:
                     mapa_atual = {'vencimento': layout['col_vencimento'], 'numero': layout['col_numero'], 'valor': layout['col_valor'], 'pagador': layout['col_pagador']}
                     dados_processados = processar_dataframe_mapeado(df_bruto, mapa_atual)
-                    if st.button("🚀 Confirmar Importação", type="primary"):
-                        for t in dados_processados: salvar_dados_no_banco([t], conf['empresa_cnpj'])
-                        st.success("Importado!"); time.sleep(1); st.rerun()
+                    
+                    df_rev = pd.DataFrame(dados_processados)
+                    st.markdown("##### 🔍 Revisão da Importação")
+                    
+                    # Verificação de Clientes e Títulos
+                    lista_clientes_nomes = [c['nome'] for c in listar_clientes_db(conf['empresa_cnpj'])]
+                    rows_final = []
+                    
+                    for i, row in df_rev.iterrows():
+                        nome_pag = row['pagador']
+                        existe_cli = nome_pag in lista_clientes_nomes
+                        
+                        # Verifica se título existe considerando Número, Pagador e Vencimento
+                        from src.database import conectar
+                        conn = conectar()
+                        exists_tit = conn.cursor().execute(
+                            "SELECT status FROM titulos WHERE numero_nf=? AND pagador=? AND vencimento=?", 
+                            (row['numero'], nome_pag, row['vencimento'])
+                        ).fetchone()
+                        conn.close()
+                        
+                        row_status = "Novo Cliente" if not existe_cli else "Título Duplicado" if exists_tit else "Ok"
+                        rows_final.append({
+                            "Status": row_status,
+                            "Pagador": nome_pag,
+                            "Número": row['numero'],
+                            "Vencimento": row['vencimento'],
+                            "Valor": row['valor'],
+                            "Ação Dupli": "Manter Aberto" if not exists_tit else "Manter Aberto", # Default para Manter Aberto
+                            "CNPJ": "",
+                            "WhatsApp": "",
+                            "Email": "",
+                            "Contato": ""
+                        })
+                    
+                    df_final_rev = pd.DataFrame(rows_final)
+                    edited_df = st.data_editor(df_final_rev, hide_index=True, width="stretch", key="import_editor")
+                    
+                    if st.button("🚀 Confirmar e Salvar no Banco", type="primary"):
+                        for _, r in edited_df.iterrows():
+                            # Se for novo cliente, cadastra primeiro
+                            if r['Status'] == "Novo Cliente":
+                                mgr.cadastrar_cliente_completo(r['Pagador'], r['CNPJ'], r['WhatsApp'], r['Email'], r['Contato'])
+                            
+                            # Salva o título
+                            t_data = {
+                                'pagador': r['Pagador'],
+                                'numero': r['Número'],
+                                'vencimento': r['Vencimento'],
+                                'valor': r['Valor']
+                            }
+                            
+                            if r['Status'] == "Título Duplicado":
+                                # Atualiza status conforme escolha
+                                from src.database import conectar
+                                conn = conectar()
+                                conn.cursor().execute(
+                                    "UPDATE titulos SET status=? WHERE numero_nf=? AND pagador=? AND vencimento=?", 
+                                    ("Aberto" if r['Ação Dupli'] == "Manter Aberto" else r['Ação Dupli'], r['Número'], r['Pagador'], r['Vencimento'])
+                                )
+                                conn.commit()
+                                conn.close()
+                            else:
+                                salvar_dados_no_banco([t_data], conf['empresa_cnpj'])
+                                
+                        st.success("Operação concluída com sucesso!"); time.sleep(1); st.rerun()
 
     # --- ABA 2: MANUAL ---
     with t2:
         st.subheader("📝 Lançar Manualmente")
+        
+        # Filtro de Cliente
+        cli_search = st.text_input("🔍 Procurar Cliente (Nome ou CNPJ)")
         lista_clientes = listar_clientes_db(conf['empresa_cnpj'])
-        with st.form("form_manual"):
-            c1, c2 = st.columns(2)
-            cliente_sel = c1.selectbox("Cliente", [c['nome'] for c in lista_clientes] if lista_clientes else ["--"])
-            nf_manual = c2.text_input("Número do Documento/NF")
-            valor_manual = st.number_input("Valor (R$)", min_value=0.01)
-            venc_manual = st.date_input("Vencimento")
-            if st.form_submit_button("💾 Lançar"):
-                venc_str = venc_manual.strftime("%d/%m/%Y")
-                salvar_dados_no_banco([{'pagador': cliente_sel, 'numero': nf_manual, 'vencimento': venc_str, 'valor': valor_manual}], conf['empresa_cnpj'])
-                st.success("Lançado!"); st.rerun()
+        
+        selected_cli = None
+        if cli_search:
+            matches = [c for c in lista_clientes if cli_search.lower() in c['nome'].lower() or cli_search in c['cnpj']]
+            if matches:
+                selected_cli = st.selectbox("Selecione o Cliente Encontrado", matches, format_func=lambda x: f"{x['nome']} ({x['cnpj']})")
+            else:
+                st.warning("⚠️ Cliente não encontrado. Cadastre abaixo:")
+                with st.container(border=True):
+                    n_nome = st.text_input("Razão Social")
+                    n_cnpj = st.text_input("CNPJ")
+                    n_mail = st.text_input("E-mails (sep por ;)")
+                    n_zap = st.text_input("WhatsApp (sep por ;)")
+                    n_cont = st.text_input("Nome do Contato")
+                    if st.button("💾 Cadastrar Novo Cliente"):
+                        mgr.cadastrar_cliente_completo(n_nome, n_cnpj, n_zap, n_mail, n_cont)
+                        st.success("Cliente cadastrado!"); st.rerun()
+        
+        if selected_cli:
+            st.markdown(f"### Lançando para: **{selected_cli['nome']}**")
+            
+            if 'linhas_manuais' not in st.session_state:
+                st.session_state.linhas_manuais = [{'numero_nf': '', 'vencimento': datetime.date.today(), 'valor': 0.0}]
+            
+            for i, linha in enumerate(st.session_state.linhas_manuais):
+                c1, c2, c3 = st.columns([2, 2, 2])
+                st.session_state.linhas_manuais[i]['numero_nf'] = c1.text_input(f"Título/NF #{i+1}", value=linha['numero_nf'], key=f"nf_{i}")
+                st.session_state.linhas_manuais[i]['vencimento'] = c2.date_input(f"Vencimento #{i+1}", value=linha['vencimento'], key=f"venc_{i}")
+                st.session_state.linhas_manuais[i]['valor'] = c3.number_input(f"Valor #{i+1}", value=linha['valor'], min_value=0.0, key=f"val_{i}")
+            
+            if st.button("➕ Adicionar Linha"):
+                st.session_state.linhas_manuais.append({'numero_nf': '', 'vencimento': datetime.date.today(), 'valor': 0.0})
+                st.rerun()
+            
+            if st.button("🚀 Lançar Títulos", type="primary"):
+                titulos_final = []
+                for l in st.session_state.linhas_manuais:
+                    if l['numero_nf'] and l['valor'] > 0:
+                        titulos_final.append({
+                            'pagador': selected_cli['nome'],
+                            'numero': l['numero_nf'],
+                            'vencimento': l['vencimento'].strftime("%d/%m/%Y"),
+                            'valor': l['valor']
+                        })
+                
+                if titulos_final:
+                    salvar_dados_no_banco(titulos_final, conf['empresa_cnpj'])
+                    st.success(f"{len(titulos_final)} títulos lançados!"); time.sleep(1)
+                    st.session_state.linhas_manuais = [{'numero_nf': '', 'vencimento': datetime.date.today(), 'valor': 0.0}]
+                    st.rerun()
+
+    # Helper para Cobrança
+    def processar_cobranca_cliente(cli_nome, cli_info, user, is_simulacao):
+        msg = mgr.gerar_mensagem_cobranca(cli_nome, cli_info['dados_cliente'], cli_info['total'], cli_info['itens'])
+        zip_path, temp = mgr.buscar_e_zipar_pdfs(cli_nome, cli_info['itens'])
+        res = mgr.executar_processo_completo_cobranca(cli_nome, msg, zip_path, cli_info['itens'], temp, usuario=user, simulacao=is_simulacao)
+        return res
 
     # --- ABA 3: COBRANÇA ---
     with t3:
+        user_logado = st.session_state.get('usuario_atual')
         rel = mgr.agrupar_debitos_por_cliente()
         if rel:
+            c1, c2 = st.columns([2, 1])
+            is_sim = c1.checkbox("🧪 Modo Simulação (Não envia mensagens reais)", value=False)
+            
+            if c2.button("🚀 Enviar Cobranças para TODOS", type="primary", use_container_width=True):
+                progress_bar = st.progress(0)
+                st.info(f"Iniciando envio para {len(rel)} clientes...")
+                for i, (cli, info) in enumerate(rel.items()):
+                    processar_cobranca_cliente(cli, info, user_logado, is_sim)
+                    progress_bar.progress((i + 1) / len(rel))
+                st.success("✅ Processo em massa concluído!")
+                time.sleep(1); st.rerun()
+
+            st.divider()
             st.markdown(f"### 🚀 Fila: {len(rel)} clientes")
+            
             for cli, info in rel.items():
                 with st.expander(f"🔴 {cli} | R$ {info['total']:,.2f}"):
-                    st.dataframe(pd.DataFrame(info['itens']))
-                    if st.button(f"📧 Enviar Cobrança para {cli}", key=f"btn_{cli}", type="primary"):
-                        msg = mgr.gerar_mensagem_cobranca(cli, info['dados_cliente'], info['total'], info['itens'])
-                        zip_path, temp = mgr.buscar_e_zipar_pdfs(cli, info['itens'])
-                        mgr.executar_processo_completo_cobranca(cli, msg, zip_path, info['itens'], temp)
-                        st.success("Enviado!")
+                    st.dataframe(pd.DataFrame(info['itens']), hide_index=True)
+                    if st.button(f"📧 Enviar Cobrança para {cli}", key=f"btn_{cli}", type="secondary"):
+                        res = processar_cobranca_cliente(cli, info, user_logado, is_sim)
+                        if res['email'] or res['whatsapp']:
+                            label = "Simulado" if is_sim else "Enviada"
+                            st.success(f"Cobrança {label}! (E-mail: {res['email']} | Zap: {res['whatsapp']})")
+                        else:
+                            st.error("Falha no envio. Verifique conexões.")
+        else:
+            st.info("✅ Tudo em dia! Nenhuma cobrança pendente.")
 
     # --- ABA 4: CRM ---
     with t4:
         st.subheader("👥 CRM & Carteira")
+        
+        c1, c2 = st.columns([3, 1])
+        filtro_crm = c1.text_input("🔍 Filtrar Cliente (Nome ou CNPJ)", key="crm_filter")
+        
         all_clis = listar_clientes_db(conf['empresa_cnpj'])
+        if filtro_crm:
+            all_clis = [c for c in all_clis if filtro_crm.lower() in c['nome'].lower() or filtro_crm in c['cnpj']]
+            
         if all_clis:
-            df_edit = st.data_editor(pd.DataFrame(all_clis), hide_index=True)
-            if st.button("💾 Atualizar CRM"):
-                for _, r in df_edit.iterrows(): mgr.cadastrar_cliente_completo(r['nome'], r['cnpj'], r['whatsapp'], r['email'])
-                st.success("Atualizado!")
+            df_clis = pd.DataFrame(all_clis)
+            
+            # Gmail-style selection
+            c_sel_all = st.checkbox(" selecionar todos", key="crm_sel_all_check")
+            df_clis.insert(0, 'Selecionar', c_sel_all)
+            
+            # Editor de dados para alterações rápidas - Esconde o ID
+            edited_crm = st.data_editor(
+                df_clis, 
+                hide_index=True, 
+                width="stretch", 
+                key="crm_editor",
+                column_order=['Selecionar', 'nome', 'cnpj', 'whatsapp', 'email', 'contato'],
+                column_config={
+                    "id": None, 
+                    "Selecionar": st.column_config.CheckboxColumn("Sel", default=False)
+                }
+            )
+            
+            if 'confirmar_exclusao_crm' not in st.session_state:
+                st.session_state.confirmar_exclusao_crm = False
+
+            col1, col2 = st.columns([1, 4])
+            if col1.button("💾 Salvar Alterações"):
+                for _, r in edited_crm.iterrows():
+                    mgr.cadastrar_cliente_completo(r['nome'], r['cnpj'], r['whatsapp'], r['email'], r['contato'])
+                st.success("CRM Atualizado!"); st.rerun()
+            
+            # Lógica de Exclusão corrigida (sem botões aninhados)
+            if col2.button("🗑️ Excluir Selecionados", type="secondary"):
+                clis_to_del = edited_crm[edited_crm['Selecionar'] == True]
+                if not clis_to_del.empty:
+                    st.session_state.confirmar_exclusao_crm = True
+                else:
+                    st.info("Nenhum cliente selecionado.")
+
+            if st.session_state.confirmar_exclusao_crm:
+                clis_to_del = edited_crm[edited_crm['Selecionar'] == True]
+                st.warning(f"⚠️ Atenção: Você está prestes a excluir {len(clis_to_del)} clientes e todos os seus títulos.")
+                
+                c_del1, c_del2 = st.columns(2)
+                if c_del1.button("✅ Sim, Confirmar Exclusão", type="primary", use_container_width=True):
+                    user_logado = st.session_state.get('usuario_atual')
+                    nome_usu = user_logado.get('nome_completo', 'Operador') if isinstance(user_logado, dict) else str(user_logado)
+                    
+                    for _, r in clis_to_del.iterrows():
+                        excluir_cliente_db(r['id'], r['nome'], usuario=nome_usu)
+                    
+                    st.session_state.confirmar_exclusao_crm = False
+                    st.success("Clientes excluídos com sucesso!")
+                    time.sleep(1); st.rerun()
+                    
+                if c_del2.button("❌ Cancelar", use_container_width=True):
+                    st.session_state.confirmar_exclusao_crm = False
+                    st.rerun()
+
+            st.divider()
+            st.markdown("#### 📂 Títulos por Cliente")
+            cli_sel_tit = st.selectbox("Selecione um cliente para ver todos os títulos", ["--"] + [c['nome'] for c in all_clis])
+            
+            if cli_sel_tit != "--":
+                tits = listar_titulos_por_cliente(cli_sel_tit, conf['empresa_cnpj'])
+                if tits:
+                    df_tits = pd.DataFrame(tits)
+                    st.write(f"Títulos de {cli_sel_tit}:")
+                    # Editor para mudar status manualmente (Pago, Aberto, etc)
+                    edited_tits = st.data_editor(
+                        df_tits, 
+                        hide_index=True, 
+                        width="stretch",
+                                                 column_config={
+                                                     "status": st.column_config.SelectboxColumn("Status", options=["Aberto", "Pago", "Negociado", "Cartório", "Baixado"]),
+                                                     "acao": st.column_config.SelectboxColumn("Ação", options=["Cobrar", "Pausar"])
+                                                 })
+                    if st.button("💾 Salvar Situação dos Títulos"):
+                        user_logado = st.session_state.get('usuario_atual')
+                        for _, r in edited_tits.iterrows():
+                            # Busca o status original para auditoria
+                            orig = next((t for t in tits if t['id'] == r['id']), None)
+                            if orig and (orig['status'] != r['status'] or orig['acao'] != r['acao']):
+                                mgr.registrar_mudanca_status(r['id'], user_logado, orig['status'], r['status'], r['acao'])
+                        st.success("Títulos atualizados e auditados!"); st.rerun()
+                else:
+                    st.info("Nenhum título encontrado para este cliente.")
+
+    # --- ABA 5: RELATÓRIOS ---
+    with t5:
+        st.subheader("📊 Relatórios Auditáveis")
+        st.markdown("Gere relatórios em PDF para conferência e auditoria.")
+        
+        with st.form("form_rel"):
+            c1, c2, c3 = st.columns(3)
+            r_cli = c1.selectbox("Filtrar por Cliente", ["Todos"] + [c['nome'] for c in listar_clientes_db(conf['empresa_cnpj'])])
+            r_ini = c2.date_input("Data Início", value=datetime.date.today() - datetime.timedelta(days=30))
+            r_fim = c3.date_input("Data Fim")
+            
+            if st.form_submit_button("📄 Gerar Relatório de Cobranças"):
+                filtros = {
+                    "cliente": r_cli if r_cli != "Todos" else None,
+                    "data_inicio": r_ini.strftime("%Y-%m-%d"),
+                    "data_fim": r_fim.strftime("%Y-%m-%d")
+                }
+                path = mgr.gerar_relatorio_pdf_cobrancas(filtros)
+                if path and os.path.exists(path):
+                    with open(path, "rb") as f:
+                        st.download_button("📥 Baixar PDF do Relatório", f, file_name=os.path.basename(path), mime="application/pdf")
+                else:
+                    st.warning("Nenhum dado encontrado para os filtros selecionados.")
 
 # ==============================================================================
 # ÁREA DE ATENDIMENTO OMNICHANNEL (NOVO)
@@ -587,9 +830,12 @@ elif selected == "Configurações":
             
             if btn_salvar:
                 updates = {
-                    "imap_server": imap_server, "smtp_server": smtp_server,
-                    "base_mail_user": b_u, "base_mail_pass": b_p, 
-                    "fin_mail_user": f_u, "fin_mail_pass": f_p
+                    "imap_server": imap_server, 
+                    "smtp_server": smtp_server,
+                    "base_mail_user": b_u, 
+                    "base_mail_pass": b_p, 
+                    "fin_mail_user": f_u, 
+                    "fin_mail_pass": f_p
                 }
                 salvar_configuracoes_db(updates)
                 st.session_state.config.update(updates)

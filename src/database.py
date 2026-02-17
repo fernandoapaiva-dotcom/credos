@@ -14,13 +14,14 @@ def inicializar_banco():
     conn = conectar()
     c = conn.cursor()
     
-    # 1. Configurações
+    # 1. Configurações (CHAVES PADRONIZADAS)
     c.execute('''CREATE TABLE IF NOT EXISTS config (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         empresa_nome TEXT, empresa_cnpj TEXT,
         gemini_api_key TEXT, evo_url TEXT, evo_key TEXT,
-        base_mail_user TEXT, base_mail_pass TEXT, base_imap_server TEXT,
-        fin_mail_user TEXT, fin_mail_pass TEXT, fin_smtp_server TEXT, fin_imap_server TEXT
+        base_mail_user TEXT, base_mail_pass TEXT, imap_server TEXT,
+        fin_mail_user TEXT, fin_mail_pass TEXT, smtp_server TEXT,
+        logo_b64 TEXT
     )''')
     if c.execute("SELECT count(*) FROM config").fetchone()[0] == 0:
         c.execute("INSERT INTO config (empresa_nome) VALUES ('Minha Empresa')")
@@ -62,10 +63,16 @@ def inicializar_banco():
         col_vencimento TEXT, col_numero TEXT, col_valor TEXT, col_pagador TEXT
     )''')
 
-    # 7. Logs
-    c.execute('''CREATE TABLE IF NOT EXISTS logs_envio (
+    # 8. Auditoria de Títulos
+    c.execute('''CREATE TABLE IF NOT EXISTS auditoria_titulos (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        data_envio TEXT, cliente TEXT, tipo_envio TEXT, status TEXT, detalhes TEXT
+        titulo_id INTEGER,
+        usuario TEXT,
+        data_hora TEXT,
+        status_anterior TEXT,
+        status_novo TEXT,
+        acao TEXT,
+        FOREIGN KEY(titulo_id) REFERENCES titulos(id)
     )''')
     
     conn.commit()
@@ -152,12 +159,14 @@ def salvar_cliente_db(nome, cnpj, whatsapp, email, contato=None):
     conn.commit()
     conn.close()
 
-def excluir_cliente_db(id_cliente, nome_cliente):
+def excluir_cliente_db(id_cliente, nome_cliente, usuario=None):
     conn = conectar()
     conn.cursor().execute("DELETE FROM clientes WHERE id=?", (id_cliente,))
     conn.cursor().execute("DELETE FROM titulos WHERE pagador=?", (nome_cliente,))
     conn.commit()
     conn.close()
+    if usuario:
+        salvar_log_envio(nome_cliente, "Exclusão CRM", "Sucesso", f"Cliente e títulos excluídos", usuario=usuario)
 
 # ==============================================================================
 # 3. TÍTULOS FINANCEIROS
@@ -166,7 +175,12 @@ def salvar_dados_no_banco(titulos, cnpj_empresa=None):
     conn = conectar()
     c = conn.cursor()
     for t in titulos:
-        exists = c.execute("SELECT id FROM titulos WHERE numero_nf=? AND pagador=?", (t['numero'], t['pagador'])).fetchone()
+        # Verifica se título existe considerando Número, Pagador e Vencimento (para parcelas)
+        exists = c.execute(
+            "SELECT id FROM titulos WHERE numero_nf=? AND pagador=? AND vencimento=?", 
+            (t['numero'], t['pagador'], t['vencimento'])
+        ).fetchone()
+        
         if not exists:
             c.execute("INSERT INTO titulos (pagador, numero_nf, vencimento, valor) VALUES (?,?,?,?)", 
                       (t['pagador'], t['numero'], t['vencimento'], t['valor']))
@@ -256,21 +270,32 @@ def salvar_agendamento_db(cnpj_empresa, dias, hora, pular_feriados, ativo):
     finally:
         conn.close()
 
-def salvar_log_envio(dados_ou_cliente, tipo_envio=None, status=None, detalhes=None):
+def salvar_log_envio(dados_ou_cliente, tipo_envio=None, status=None, detalhes=None, usuario=None):
     conn = conectar()
     c = conn.cursor()
     if isinstance(dados_ou_cliente, dict):
         dados = dados_ou_cliente
         c.execute("""
-            INSERT INTO logs_envio (data_envio, cliente, tipo_envio, status, detalhes)
-            VALUES (?, ?, ?, ?, ?)
-        """, (dados.get('data'), dados.get('cliente'), dados.get('canal'), dados.get('status'), str(dados)))
+            INSERT INTO logs_envio (data_envio, cliente, tipo_envio, status, detalhes, usuario)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (dados.get('data'), dados.get('cliente'), dados.get('canal'), dados.get('status'), str(dados), usuario))
     else:
         agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         c.execute("""
-            INSERT INTO logs_envio (data_envio, cliente, tipo_envio, status, detalhes)
-            VALUES (?, ?, ?, ?, ?)
-        """, (agora, dados_ou_cliente, tipo_envio, status, detalhes))
+            INSERT INTO logs_envio (data_envio, cliente, tipo_envio, status, detalhes, usuario)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (agora, dados_ou_cliente, tipo_envio, status, detalhes, usuario))
+    conn.commit()
+    conn.close()
+
+def registrar_auditoria_titulo(titulo_id, usuario, status_anterior, status_novo, acao):
+    conn = conectar()
+    c = conn.cursor()
+    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    c.execute("""
+        INSERT INTO auditoria_titulos (titulo_id, usuario, data_hora, status_anterior, status_novo, acao)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (titulo_id, usuario, agora, status_anterior, status_novo, acao))
     conn.commit()
     conn.close()
 
@@ -391,7 +416,8 @@ def migrar_banco_automatico():
     # Dicionário de Tabela: [Colunas que DEVEM existir]
     migracoes = {
         "usuarios": ["nome_completo", "perfil", "status", "foto_b64"],
-        "config": ["empresa_cnpj", "logo_b64", "gemini_api_key", "evo_url", "evo_key"]
+        "config": ["empresa_cnpj", "logo_b64", "gemini_api_key", "evo_url", "evo_key"],
+        "logs_envio": ["usuario"]
     }
     
     for tabela, colunas in migracoes.items():

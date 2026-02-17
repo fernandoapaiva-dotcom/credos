@@ -1,6 +1,7 @@
 import requests
 import base64
 import os
+import mimetypes
 
 class EvolutionController:
     def __init__(self, config=None, nome_empresa_cliente=None):
@@ -117,3 +118,74 @@ class EvolutionController:
         except Exception as e:
             print(f"Erro Crítico ao buscar QR: {e}")
             return None
+
+    def enviar_mensagem_texto(self, numero, mensagem):
+        try:
+            if not self.url or not self.apikey: return False
+            target = "".join(filter(str.isdigit, str(numero)))
+            if not target: return False
+            if len(target) <= 11: target = "55" + target
+            
+            endpoint = f"{self.url}/message/sendText/{self.instance}"
+            
+            payload = {
+                "number": target,
+                "text": mensagem,
+                "delay": 1200,
+                "linkPreview": False
+            }
+            
+            print(f"DEBUG EVOLUTION: Enviando POST para {endpoint}")
+            r = requests.post(endpoint, json=payload, headers=self.headers)
+            print(f"DEBUG EVOLUTION: Resposta {r.status_code} - {r.text[:200]}")
+            
+            if r.status_code not in [200, 201]:
+                self.debug_log("FALHA ENVIO TEXTO", endpoint, r, payload)
+                return False
+            return True
+        except Exception as e:
+            print(f"Erro Crítico WhatsApp Texto: {e}")
+            return False
+
+    def enviar_midia(self, numero, caminho):
+        try:
+            if not self.url or not self.apikey: return False
+            target = "".join(filter(str.isdigit, str(numero)))
+            if not target: return False
+            if len(target) <= 11: target = "55" + target
+            
+            if not os.path.exists(caminho):
+                print(f"❌ Erro: Arquivo {caminho} não encontrado.")
+                return False
+
+            with open(caminho, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode('utf-8')
+            
+            endpoint = f"{self.url}/message/sendMedia/{self.instance}"
+            filename = os.path.basename(caminho)
+            
+            # Determina o tipo de mídia
+            mime, _ = mimetypes.guess_type(caminho)
+            mediatype = "document" # Default seguro para Evolution
+            if mime:
+                if "image" in mime: mediatype = "image"
+                elif "video" in mime: mediatype = "video"
+                elif "audio" in mime: mediatype = "audio"
+
+            payload = {
+                "number": target,
+                "media": b64,
+                "mediatype": mediatype,
+                "fileName": filename,
+                "caption": filename
+            }
+            
+            r = requests.post(endpoint, json=payload, headers=self.headers)
+            
+            if r.status_code not in [200, 201]:
+                self.debug_log("FALHA ENVIO MÍDIA", endpoint, r, {"number": target, "file": filename})
+                return False
+            return True
+        except Exception as e:
+            print(f"Erro Crítico WhatsApp Mídia: {e}")
+            return False

@@ -26,7 +26,14 @@ class Manager:
         
         # Carrega configurações globais da empresa
         self.config = carregar_configuracoes_db(self.cnpj_empresa)
-        self.evo = EvolutionController(self.config) if self.config.get('evo_url') else None
+        
+        # Sobrescreve com ENV se faltar no banco
+        if not self.config.get('evo_url'): self.config['evo_url'] = os.getenv("SERVER_URL")
+        if not self.config.get('evo_key'): self.config['evo_key'] = os.getenv("AUTHENTICATION_API_KEY")
+
+        # Instância dinâmica (CNPJ sem pontos/traços)
+        inst_name = self.cnpj_empresa.replace('.', '').replace('/', '').replace('-', '')
+        self.evo = EvolutionController(self.config, nome_empresa_cliente=inst_name) if self.config.get('evo_url') else None
         
         self.pasta_base = "temp_data"
         self.pasta_zips = os.path.join(self.pasta_base, "zips")
@@ -119,11 +126,32 @@ class Manager:
         res = {}
         for cli in todos:
             titulos = listar_titulos_por_cliente(cli['nome'], self.cnpj_empresa)
-            pendentes = [t for t in titulos if t['acao'] == 'Cobrar' and t['status'] == 'Aberto']
+            pendentes = [t for t in titulos if t['acao'] == 'Cobrar' and t['status'] in ('Aberto', 'Manter Aberto')]
             if pendentes:
                 total = sum(t['valor'] for t in pendentes)
                 res[cli['nome']] = {'total': total, 'itens': pendentes, 'dados_cliente': cli}
         return res
+
+    def gerar_mensagem_cobranca(self, nome_cliente, dados_cliente, total, itens):
+        # Template solicitado pelo usuário
+        import datetime
+        agora = datetime.datetime.now()
+        saudacao = "Bom dia" if agora.hour < 12 else "Boa tarde" if agora.hour < 18 else "Boa noite"
+        
+        contato = dados_cliente.get('contato', nome_cliente)
+        empresa_dona = self.config.get('empresa_nome', 'Nossa Empresa')
+        
+        msg = f"{saudacao}, {contato}.\n\n"
+        msg += f"Identificamos pendências financeiras em nome de {nome_cliente}.\n"
+        msg += f"Solicitamos contato em até 10 dias para regularização.\n\n"
+        msg += f"Títulos em Aberto:\n"
+        
+        for item in itens:
+            msg += f"🧾 NF {item['numero_nf']} | Venc: {item['vencimento']} | R$ {item['valor']:,.2f}\n"
+            
+        msg += f"\n💰 Total: R$ {total:,.2f}\n\n"
+        msg += f"Atenciosamente,\nEquipe {empresa_dona}"
+        return msg
 
     def _gerar_pdf_demonstrativo(self, nome_cliente, lista_titulos):
         pdf = FPDF(); pdf.add_page(); pdf.set_font("Arial", 'B', 16)
@@ -144,9 +172,9 @@ class Manager:
 
     def buscar_e_zipar_pdfs(self, nome_cliente, lista_titulos):
         config_email_base = {
-            'mail_user': self.config.get('base_mail_user') or self.config.get('mail_user'),
-            'mail_pass': self.config.get('base_mail_pass') or self.config.get('mail_pass'),
-            'imap_server': self.config.get('base_imap_server') or self.config.get('imap_server') or 'imap.gmail.com'
+            'mail_user': self.config.get('base_mail_user'),
+            'mail_pass': self.config.get('base_mail_pass'),
+            'imap_server': self.config.get('imap_server', 'imap.gmail.com')
         }
         
         scanner = None
@@ -156,7 +184,6 @@ class Manager:
         if config_email_base['mail_user'] and config_email_base['mail_pass']:
             try:
                 scanner = MailScanner(config_email_base)
-                scanner.conectar()
                 clis = listar_clientes_db(self.cnpj_empresa)
                 dados_cliente = next((c for c in clis if c['nome'] == nome_cliente), None)
                 cnpj_alvo = dados_cliente['cnpj'] if dados_cliente else ""
@@ -164,11 +191,10 @@ class Manager:
                 for t in lista_titulos:
                     nf = str(t.get('numero_nf', '')).strip()
                     if nf:
-                        anexos = scanner.baixar_anexos_por_nf_validado(nf, cnpj_alvo, nome_cliente)
+                        anexos = scanner.baixar_anexos_por_nf_validado(nf, cnpj_alvo, nome_cliente, t.get('vencimento'), t.get('valor'))
                         if anexos:
                             arquivos.extend(anexos)
                             arquivos_temp_para_deletar.extend(anexos)
-                scanner.fechar()
             except Exception as e:
                 print(f"Erro no scanner: {e}")
 
@@ -185,36 +211,69 @@ class Manager:
         
         return zip_path, arquivos_temp_para_deletar
 
-    def executar_processo_completo_cobranca(self, nome_cliente, msg, zip_path, lista_titulos_cobradas=None, arquivos_temp=None):
+    def executar_processo_completo_cobranca(self, nome_cliente, msg, zip_path, lista_titulos_cobradas=None, arquivos_temp=None, usuario=None, simulacao=False):
         clis = listar_clientes_db(self.cnpj_empresa)
         dados = next((c for c in clis if c['nome'] == nome_cliente), None)
         if not dados: return {'email': False, 'whatsapp': False}
         
-        res_email = self._enviar_email_smtp(dados['email'], "Aviso de Pendência", msg, zip_path) if dados.get('email') else False
-        res_whats = False
+        res_email = False
+        if dados.get('email'):
+            if simulacao:
+                print(f"🧪 [SIMULAÇÃO] Enviando e-mail para {dados['email']}")
+                res_email = True
+            else:
+                res_email = self._enviar_email_smtp(dados['email'], "Aviso de Pendência", msg, zip_path)
         
+        res_whats = False
         whatsapp_field = dados.get('whatsapp', '')
         if whatsapp_field and self.evo:
-            numeros = [n.strip() for n in whatsapp_field.split(',') if n.strip()]
+            numeros = [n.strip() for n in whatsapp_field.split(';') if n.strip()]
+            success_count = 0
             for num in numeros:
-                self.evo.enviar_mensagem_texto(num, msg)
-                if zip_path and os.path.exists(zip_path):
-                    self.evo.enviar_midia(num, zip_path)
-            res_whats = True
+                if simulacao:
+                    print(f"🧪 [SIMULAÇÃO] Enviando WhatsApp para {num}")
+                    success_count += 1
+                else:
+                    print(f"☎️ Tentando WhatsApp para {num}...")
+                    status_txt = self.evo.enviar_mensagem_texto(num, msg)
+                    if status_txt:
+                        print(f"✅ WhatsApp texto enviado para {num}!")
+                        success_count += 1
+                        if zip_path and os.path.exists(zip_path):
+                            print(f"📎 Tentando enviar anexo ZIP para {num}...")
+                            self.evo.enviar_midia(num, zip_path)
+                    else:
+                        print(f"❌ Falha ao enviar WhatsApp Texto para {num}")
+            res_whats = (success_count > 0)
 
         # Log de Envio
         ids = [t['id'] for t in lista_titulos_cobradas] if lista_titulos_cobradas else []
-        status = "Sucesso Total" if (res_email and res_whats) else "Sucesso Parcial" if (res_email or res_whats) else "Falha"
-        detalhe = json.dumps({"titulos_ids": ids, "valor_total": sum(t['valor'] for t in lista_titulos_cobradas) if lista_titulos_cobradas else 0})
-        salvar_log_envio(nome_cliente, "Cobrança Manual", status, detalhe)
+        status = "SIMULADO" if simulacao else "Sucesso Total" if (res_email and res_whats) else "Sucesso Parcial" if (res_email or res_whats) else "Falha"
+        detalhe = json.dumps({"titulos_ids": ids, "valor_total": sum(t['valor'] for t in lista_titulos_cobradas) if lista_titulos_cobradas else 0, "simulacao": simulacao})
+        salvar_log_envio(nome_cliente, "Cobrança Manual", status, detalhe, usuario=usuario)
+
+        # Deletar arquivos temporários e o ZIP conforme solicitado
+        if zip_path and os.path.exists(zip_path):
+            try: os.remove(zip_path)
+            except: pass
+            
+        if arquivos_temp:
+            for f in arquivos_temp:
+                if os.path.exists(f):
+                    try: os.remove(f)
+                    except: pass
 
         return {'email': res_email, 'whatsapp': res_whats}
 
     def _enviar_email_smtp(self, para, assunto, corpo, anexo):
         try:
-            user = self.config.get('fin_mail_user') or self.config.get('mail_user')
-            pwd = self.config.get('fin_mail_pass') or self.config.get('mail_pass')
-            srv = self.config.get('fin_smtp_server') or self.config.get('smtp_server')
+            user = self.config.get('fin_mail_user') or self.config.get('base_mail_user')
+            pwd = self.config.get('fin_mail_pass') or self.config.get('base_mail_pass')
+            srv = self.config.get('smtp_server')
+            
+            if not srv or not user or not pwd:
+                print("⚠️ Configurações de e-mail (SMTP) incompletas.")
+                return False
             
             msg = MIMEMultipart()
             msg['From'] = user
@@ -230,8 +289,7 @@ class Manager:
                     part.add_header("Content-Disposition", f"attachment; filename={os.path.basename(anexo)}")
                     msg.attach(part)
             
-            s = smtplib.SMTP(srv, 587)
-            s.starttls()
+            s = smtplib.SMTP_SSL(srv, 465)
             s.login(user, pwd)
             s.send_message(msg)
             s.quit()
@@ -251,3 +309,62 @@ class Manager:
         """Ponte para a exclusão do layout no banco de dados."""
         from src.database import excluir_layout_db
         return excluir_layout_db(layout_id)
+
+    def registrar_mudanca_status(self, titulo_id, usuario, status_ant, status_novo, acao):
+        from src.database import registrar_auditoria_titulo, atualizar_titulo_status_acao
+        atualizar_titulo_status_acao(titulo_id, status_novo, acao)
+        registrar_auditoria_titulo(titulo_id, usuario, status_ant, status_novo, acao)
+
+    def gerar_relatorio_pdf_cobrancas(self, filtros):
+        # Implementação básica do relatório auditável
+        from src.database import conectar
+        import pandas as pd
+        
+        conn = conectar()
+        query = """
+            SELECT l.data_envio, l.cliente, l.tipo_envio, l.status, l.usuario, l.detalhes
+            FROM logs_envio l
+            WHERE 1=1
+        """
+        params = []
+        if filtros.get('cliente'):
+            query += " AND l.cliente = ?"
+            params.append(filtros['cliente'])
+        if filtros.get('data_inicio'):
+            query += " AND l.data_envio >= ?"
+            params.append(filtros['data_inicio'])
+        if filtros.get('data_fim'):
+            query += " AND l.data_envio <= ?"
+            params.append(filtros['data_fim'])
+            
+        df = pd.read_sql_query(query, conn, params=params)
+        conn.close()
+        
+        if df.empty: return None
+        
+        # Gerar o PDF
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("Arial", 'B', 14)
+        empresa = self.config.get('empresa_nome', 'Sistema Credos')
+        pdf.cell(200, 10, txt=f"Relatório Auditável de Cobranças - {empresa}", ln=1, align='C')
+        pdf.ln(10)
+        
+        pdf.set_font("Arial", 'B', 8)
+        cols = ["Data", "Cliente", "Canal", "Status", "Usuário"]
+        for col in cols: pdf.cell(38, 8, col, 1)
+        pdf.ln()
+        
+        pdf.set_font("Arial", size=7)
+        for _, row in df.iterrows():
+            pdf.cell(38, 7, str(row['data_envio']), 1)
+            pdf.cell(38, 7, str(row['cliente'])[:30], 1)
+            pdf.cell(38, 7, str(row['tipo_envio']), 1)
+            pdf.cell(38, 7, str(row['status']), 1)
+            pdf.cell(38, 7, str(row['usuario'] or 'Sistema'), 1)
+            pdf.ln()
+            
+        filename = f"Relatorio_Cobranca_{int(time.time())}.pdf"
+        filepath = os.path.join(self.pasta_zips, filename)
+        pdf.output(filepath)
+        return filepath
