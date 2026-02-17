@@ -1,6 +1,7 @@
 import sqlite3
 import json
 import os
+from datetime import datetime
 
 # Nome do banco de dados
 DB_NAME = "credos_data.db"
@@ -9,7 +10,7 @@ def conectar():
     return sqlite3.connect(DB_NAME)
 
 def inicializar_banco():
-    """Cria as tabelas iniciais se não existirem."""
+    """Cria as tabelas iniciais se não existirem com a estrutura completa."""
     conn = conectar()
     c = conn.cursor()
     
@@ -37,10 +38,15 @@ def inicializar_banco():
         status TEXT DEFAULT 'Aberto', acao TEXT DEFAULT 'Cobrar'
     )''')
     
-    # 4. Usuários
+    # 4. Usuários (ESTRUTURA COMPLETA CORRIGIDA)
     c.execute('''CREATE TABLE IF NOT EXISTS usuarios (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT UNIQUE, password TEXT
+        login TEXT UNIQUE, 
+        password TEXT, 
+        nome_completo TEXT, 
+        perfil TEXT DEFAULT 'operador', 
+        status TEXT DEFAULT 'Ativo',
+        foto_b64 TEXT
     )''')
     
     # 5. Agendamento
@@ -69,28 +75,20 @@ def inicializar_banco():
 # 1. CONFIGURAÇÕES
 # ==============================================================================
 def carregar_configuracoes_db(cnpj_empresa=None):
-    """
-    Busca as configurações no banco. 
-    Prioriza o CNPJ da empresa logada para garantir o isolamento dos dados (SaaS).
-    """
     conn = conectar()
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
     try:
         if cnpj_empresa:
-            # Busca a configuração específica da unidade selecionada
             query = "SELECT * FROM config WHERE empresa_cnpj = ? LIMIT 1"
             row = c.execute(query, (cnpj_empresa,)).fetchone()
         else:
-            # Fallback: Busca a primeira configuração disponível (útil no primeiro acesso)
             row = c.execute("SELECT * FROM config LIMIT 1").fetchone()
         
         if row:
             config_dict = dict(row)
-            # Log de depuração para o terminal (ajuda a ver se o e-mail veio do banco)
             print(f"✅ Configurações carregadas para: {config_dict.get('empresa_nome', 'Desconhecido')}")
             return config_dict
-            
         return {}
     except Exception as e:
         print(f"❌ Erro ao carregar config: {e}")
@@ -102,41 +100,25 @@ def salvar_configuracoes_db(novos_dados: dict):
     if not novos_dados: return
     conn = conectar()
     c = conn.cursor()
-    
-    # ⚠️ AJUSTE: No reset_banco.py você usou 'config'. O nome deve ser IGUAL aqui.
     TABELA = "config" 
-    
     try:
-        # 1. Pega as colunas reais do banco
         c.execute(f"PRAGMA table_info({TABELA})")
         colunas_banco = [info[1] for info in c.fetchall()]
-        
-        if not colunas_banco:
-            print(f"❌ Erro crítico: A tabela '{TABELA}' não existe no banco de dados!")
-            return
-
-        # Filtra os dados (ex: 'logo_b64', 'empresa_nome', 'empresa_cnpj')
         dados_validos = {k: v for k, v in novos_dados.items() if k in colunas_banco}
         
-        if not dados_validos: 
-            print(f"⚠️ Nenhum dado enviado bate com as colunas de {TABELA}: {colunas_banco}")
-            return
+        if not dados_validos: return
 
-        # 2. Garante que o registro 1 existe
         c.execute(f"SELECT count(*) FROM {TABELA}")
         if c.fetchone()[0] == 0:
             c.execute(f"INSERT INTO {TABELA} (id) VALUES (1)")
 
-        # 3. Monta e executa a Query
         set_clause = ", ".join([f"{key} = ?" for key in dados_validos.keys()])
         valores = list(dados_validos.values())
-        
         query = f"UPDATE {TABELA} SET {set_clause} WHERE id = 1"
         
         c.execute(query, valores)
         conn.commit()
-        print(f"✅ Sucesso! {len(dados_validos)} campos salvos em '{TABELA}'.")
-        
+        print(f"✅ Sucesso! {len(dados_validos)} campos salvos.")
     except Exception as e:
         print(f"❌ Erro ao salvar config: {e}")
     finally:
@@ -159,8 +141,6 @@ def verificar_cliente_existe(nome_cliente):
     return res is not None
 
 def salvar_cliente_db(nome, cnpj, whatsapp, email, contato=None):
-    # O manager passa o CNPJ da empresa primeiro as vezes, vamos ignorar se for o caso
-    # Mas aqui a assinatura original é salvar_cliente_db(nome, cnpj...)
     conn = conectar()
     c = conn.cursor()
     if not verificar_cliente_existe(nome):
@@ -210,14 +190,13 @@ def atualizar_titulo_acao(id_titulo, nova_acao, novo_status=None):
     conn.commit()
     conn.close()
 
-# Função específica que o Manager pede (com ordem de parametros invertida as vezes)
 def atualizar_titulo_status_acao(id_titulo, novo_status, nova_acao):
     return atualizar_titulo_acao(id_titulo, nova_acao, novo_status)
 
 # ==============================================================================
 # 4. LAYOUTS
 # ==============================================================================
-def obter_layouts_bancos(cnpj_empresa=None): # <-- Adicionado parâmetro opcional
+def obter_layouts_bancos(cnpj_empresa=None):
     conn = conectar()
     conn.row_factory = sqlite3.Row
     try:
@@ -235,12 +214,10 @@ def salvar_layout_preferido(nome, mapa):
     conn.commit()
     conn.close()
 
-# 1. Primeiro você define a função
 def excluir_layout(id_layout):
     try:
         conn = conectar()
         cursor = conn.cursor()
-        # Verifique se o nome da tabela é layouts_importacao ou layouts_bancos
         cursor.execute("DELETE FROM layouts_importacao WHERE id=?", (id_layout,))
         conn.commit()
         conn.close()
@@ -249,15 +226,12 @@ def excluir_layout(id_layout):
         print(f"Erro ao excluir: {e}")
         return False
 
-# 2. Depois você faz a atribuição (se realmente precisar dela)
 excluir_layout_db = excluir_layout
-
-
 
 # ==============================================================================
 # 5. AGENDAMENTO E LOGS
 # ==============================================================================
-def obter_agendamento(cnpj_empresa=None): # <-- Adicionado parâmetro opcional
+def obter_agendamento(cnpj_empresa=None):
     conn = conectar()
     conn.row_factory = sqlite3.Row
     try:
@@ -267,24 +241,15 @@ def obter_agendamento(cnpj_empresa=None): # <-- Adicionado parâmetro opcional
         conn.close()
 
 def salvar_agendamento_db(cnpj_empresa, dias, hora, pular_feriados, ativo):
-    """
-    Recebe 5 argumentos para manter compatibilidade com o Manager.
-    O cnpj_empresa é recebido mas ignorado por enquanto.
-    """
     conn = conectar()
     c = conn.cursor()
     try:
-        # Limpa o agendamento anterior
         c.execute("DELETE FROM agendamento")
-        
-        # Converte lista de dias para string (JSON) para salvar no banco
         dias_str = json.dumps(dias) if isinstance(dias, list) else str(dias)
-        
         c.execute("""
             INSERT INTO agendamento (dias_ui, horario_envio, pular_feriados, ativo) 
             VALUES (?, ?, ?, ?)
         """, (dias_str, hora, pular_feriados, ativo))
-        
         conn.commit()
     except Exception as e:
         print(f"Erro ao salvar agendamento: {e}")
@@ -292,30 +257,24 @@ def salvar_agendamento_db(cnpj_empresa, dias, hora, pular_feriados, ativo):
         conn.close()
 
 def salvar_log_envio(dados_ou_cliente, tipo_envio=None, status=None, detalhes=None):
-    # O Manager chama isso de duas formas, vamos unificar
     conn = conectar()
     c = conn.cursor()
-    
     if isinstance(dados_ou_cliente, dict):
-        # Chamada antiga passando dicionario
         dados = dados_ou_cliente
         c.execute("""
             INSERT INTO logs_envio (data_envio, cliente, tipo_envio, status, detalhes)
             VALUES (?, ?, ?, ?, ?)
         """, (dados.get('data'), dados.get('cliente'), dados.get('canal'), dados.get('status'), str(dados)))
     else:
-        # Chamada nova passando argumentos
-        from datetime import datetime
         agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         c.execute("""
             INSERT INTO logs_envio (data_envio, cliente, tipo_envio, status, detalhes)
             VALUES (?, ?, ?, ?, ?)
         """, (agora, dados_ou_cliente, tipo_envio, status, detalhes))
-        
     conn.commit()
     conn.close()
 
-def listar_logs_cliente_db(nome_cliente, cnpj_empresa=None): # <-- Adicionado parâmetro opcional
+def listar_logs_cliente_db(nome_cliente, cnpj_empresa=None):
     conn = conectar()
     conn.row_factory = sqlite3.Row
     try:
@@ -326,22 +285,18 @@ def listar_logs_cliente_db(nome_cliente, cnpj_empresa=None): # <-- Adicionado pa
         return [dict(r) for r in res]
     finally:
         conn.close()
-    return [dict(r) for r in res]
 
 # ==============================================================================
-# 6. USUÁRIOS E LOGIN
+# 6. USUÁRIOS E LOGIN (REVISADO E SINCRONIZADO)
 # ==============================================================================
 def verificar_login(user, pwd):
     try:
-        conn = conectar() # Certifique-se que esta função conectar() aponta para 'credos_data.db'
-        # Mudança crucial: nomes das colunas conforme o novo banco
-        query = "SELECT * FROM usuarios WHERE login=? AND senha=?"
+        conn = conectar()
+        # Sincronizado com colunas login/password
+        query = "SELECT * FROM usuarios WHERE login=? AND password=?"
         res = conn.cursor().execute(query, (user, pwd)).fetchone()
         conn.close()
-        
-        if res:
-            return True
-        return False
+        return res is not None
     except Exception as e:
         print(f"Erro ao verificar login: {e}")
         return False
@@ -349,12 +304,12 @@ def verificar_login(user, pwd):
 def criar_usuario(login, senha, nome_completo="", perfil="operador", foto_b64=None):
     try:
         conn = conectar()
-        cursor = conn.cursor()
-        # Inserimos as 5 colunas corretas do novo banco
-        cursor.execute(
-            "INSERT INTO usuarios (login, senha, nome_completo, perfil, foto_b64) VALUES (?, ?, ?, ?, ?)", 
-            (login, senha, nome_completo, perfil, foto_b64)
-        )
+        cursor = conn.cursor()        
+        query = """
+            INSERT INTO usuarios (login, password, nome_completo, perfil, foto_b64) 
+            VALUES (?, ?, ?, ?, ?)
+        """
+        cursor.execute(query, (login, senha, nome_completo, perfil, foto_b64))
         conn.commit()
         conn.close()
         return True, "Usuário criado com sucesso!"
@@ -366,12 +321,10 @@ def criar_usuario(login, senha, nome_completo="", perfil="operador", foto_b64=No
 def listar_usuarios():
     try:
         conn = conectar()
-        conn.row_factory = sqlite3.Row # Permite que a tela leia como dicionário (u['nome_completo'])
+        conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
-        # Buscamos todas as colunas essenciais para a tela não dar KeyError
         cursor.execute("SELECT login, nome_completo, perfil, status, foto_b64 FROM usuarios")
         rows = cursor.fetchall()
-        
         usuarios = [dict(row) for row in rows]
         conn.close()
         return usuarios
@@ -382,7 +335,6 @@ def listar_usuarios():
 def excluir_usuario(login):
     try:
         conn = conectar()
-        # A tela app.py passa o 'login' (e-mail) para deletar, não mais o 'id'
         conn.cursor().execute("DELETE FROM usuarios WHERE login=?", (login,))
         conn.commit()
         conn.close()
@@ -394,8 +346,8 @@ def excluir_usuario(login):
 def alterar_senha_usuario(login, nova_senha):
     try:
         conn = conectar()
-        # Atualizado para as colunas 'senha' e 'login'
-        conn.cursor().execute("UPDATE usuarios SET senha=? WHERE login=?", (nova_senha, login))
+        # CORREÇÃO: 'password' no lugar de 'senha'
+        conn.cursor().execute("UPDATE usuarios SET password=? WHERE login=?", (nova_senha, login))
         conn.commit()
         conn.close()
         return True
@@ -407,12 +359,11 @@ def atualizar_usuario_db(login, nome_completo, perfil, senha=None, foto_b64=None
     try:
         conn = conectar()
         cursor = conn.cursor()
-        
-        # Dinamismo: atualiza foto e senha apenas se o Admin preencheu no modal de edição
+        # CORREÇÃO: Usando 'password' no lugar de 'senha' nos UPDATEs
         if senha and foto_b64:
-            cursor.execute("UPDATE usuarios SET nome_completo=?, perfil=?, senha=?, foto_b64=? WHERE login=?", (nome_completo, perfil, senha, foto_b64, login))
+            cursor.execute("UPDATE usuarios SET nome_completo=?, perfil=?, password=?, foto_b64=? WHERE login=?", (nome_completo, perfil, senha, foto_b64, login))
         elif senha:
-            cursor.execute("UPDATE usuarios SET nome_completo=?, perfil=?, senha=? WHERE login=?", (nome_completo, perfil, senha, login))
+            cursor.execute("UPDATE usuarios SET nome_completo=?, perfil=?, password=? WHERE login=?", (nome_completo, perfil, senha, login))
         elif foto_b64:
             cursor.execute("UPDATE usuarios SET nome_completo=?, perfil=?, foto_b64=? WHERE login=?", (nome_completo, perfil, foto_b64, login))
         else:
@@ -426,26 +377,46 @@ def atualizar_usuario_db(login, nome_completo, perfil, senha=None, foto_b64=None
         return False
 
 def redefinir_senha_usuario(login, senha_padrao="123456"):
-    # Reaproveita a função de alterar senha para facilitar a manutenção
     return alterar_senha_usuario(login, senha_padrao)
-
-# --- GESTÃO DE UNIDADES ---
 
 def carregar_todas_unidades_db():
     cfg = carregar_configuracoes_db()
-    if cfg: return [cfg]
-    return []
+    return [cfg] if cfg else []
+
+def migrar_banco_automatico():
+    """Garante que o banco local tenha todas as colunas necessárias."""
+    conn = conectar()
+    c = conn.cursor()
+    
+    # Dicionário de Tabela: [Colunas que DEVEM existir]
+    migracoes = {
+        "usuarios": ["nome_completo", "perfil", "status", "foto_b64"],
+        "config": ["empresa_cnpj", "logo_b64", "gemini_api_key", "evo_url", "evo_key"]
+    }
+    
+    for tabela, colunas in migracoes.items():
+        for col in colunas:
+            try:
+                c.execute(f"ALTER TABLE {tabela} ADD COLUMN {col} TEXT")
+                print(f"🛠️ Migração: Coluna '{col}' adicionada em '{tabela}'.")
+            except Exception:
+                # Se der erro, é porque a coluna já existe. Podemos ignorar.
+                pass
+    
+    conn.commit()
+    conn.close()
+
+# Invocamos a inicialização e a migração sempre que o arquivo é lido
+inicializar_banco()
+migrar_banco_automatico()
 
 # ==============================================================================
-# 7. ALIASES / APELIDOS (A CURA DEFINITIVA)
+# 7. ALIASES / APELIDOS
 # ==============================================================================
-# Estes aliases garantem que o manager.py encontre as funções com os nomes que ele espera
-
 cadastrar_cliente_completo = lambda nome, cnpj, whatsapp, email, contato, *args: salvar_cliente_db(nome, cnpj, whatsapp, email, contato)
 salvar_config_agendamento = salvar_agendamento_db
 salvar_titulos_db = salvar_dados_no_banco
 obter_clientes = listar_clientes_db
 listar_layouts_db = obter_layouts_bancos
 salvar_layout_db = salvar_layout_preferido
-excluir_layout_db = excluir_layout
 carregar_agendamento_db = obter_agendamento

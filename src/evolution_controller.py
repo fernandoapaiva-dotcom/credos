@@ -9,7 +9,7 @@ class EvolutionController:
         # Ajustado para ler EXATAMENTE as chaves do seu .env
         url_raw = os.getenv('SERVER_URL') or config.get('evo_url') or ''
         key_raw = os.getenv('AUTHENTICATION_API_KEY') or config.get('evo_key') or ''
-
+        ##key_raw = "42a24fa6-403d-4c7b-b30a-9359e9a4f783"
         self.url = url_raw.strip().rstrip('/')
         if self.url and not self.url.startswith('http'):
             self.url = 'http://' + self.url
