@@ -13,9 +13,10 @@ load_dotenv()
 
 from src.database import (
     salvar_configuracoes_db, carregar_configuracoes_db, inicializar_banco, 
-    salvar_dados_no_banco, carregar_todas_unidades_db, 
+    salvar_dados_no_banco, carregar_todas_unidades_db, cadastrar_unidade_central,
     verificar_login, alterar_senha_usuario, listar_clientes_db, excluir_cliente_db,
-    salvar_log_envio, listar_titulos_por_cliente, criar_usuario, listar_usuarios, excluir_usuario
+    salvar_log_envio, listar_titulos_por_cliente, criar_usuario, listar_usuarios, excluir_usuario,
+    excluir_unidade_central
 )
 from src.manager import Manager
 from src.mail_scanner import conectar_email, MailScanner
@@ -88,6 +89,7 @@ def fazer_logout():
 def ativar_empresa(nova_config):
     st.session_state.config = nova_config
     st.session_state.ir_para_gestao = False
+    st.session_state.novo_cadastro = False
 
 if not st.session_state.logged_in:
     c1, c2, c3 = st.columns([1,1,1])
@@ -105,12 +107,17 @@ if not st.session_state.logged_in:
 if 'config' not in st.session_state:
     st.session_state.config = {}
 
-# 2. Se o usuário estiver logado e a memória estiver vazia (pós-F5), recarrega do banco
+# 2. Se o usuário estiver logado e a memória estiver vazia (pós-F5), tenta recarregar
 if st.session_state.get('logged_in'):
     if not st.session_state.config:
-        dados_do_banco = carregar_configuracoes_db()
-        if dados_do_banco:
-            st.session_state.config = dados_do_banco
+        # Se houver apenas uma empresa, ativa ela automaticamente
+        unids = carregar_todas_unidades_db()
+        if len(unids) == 1:
+            u = unids[0]
+            conf_full = carregar_configuracoes_db(u['empresa_cnpj'])
+            conf_full['empresa_cnpj'] = u['empresa_cnpj']
+            conf_full['empresa_nome'] = u['empresa_nome']
+            st.session_state.config = conf_full
         else:
             st.session_state.config = {}
 
@@ -123,10 +130,14 @@ if os.getenv("SERVER_URL"): st.session_state.config['evo_url'] = os.getenv("SERV
 if os.getenv("AUTHENTICATION_API_KEY"): st.session_state.config['evo_key'] = os.getenv("AUTHENTICATION_API_KEY")
 if os.getenv("GEMINI_API_KEY"): st.session_state.config['gemini_api_key'] = os.getenv("GEMINI_API_KEY")
 
-mgr = Manager(conf['empresa_cnpj']) if conf.get('empresa_cnpj') else None
+mgr = Manager(conf.get('empresa_cnpj'))
 
-if not conf.get('empresa_cnpj') and 'novo_cadastro' not in st.session_state:
-    st.session_state.novo_cadastro = True
+if not conf.get('empresa_cnpj'):
+    unids = carregar_todas_unidades_db()
+    if len(unids) == 0:
+        st.session_state.novo_cadastro = True
+    else:
+        st.session_state.novo_cadastro = False
 
 # --- HEADER SUPERIOR ---
 col_logo, col_menu = st.columns([6, 2])
@@ -150,7 +161,7 @@ with col_menu:
 st.divider()
 
 # --- MENU DE NAVEGAÇÃO ---
-idx_padrao = 1 if st.session_state.get('ir_para_gestao') else 0
+idx_padrao = 2 if st.session_state.get('ir_para_gestao') else 0
 if st.session_state.get('ir_para_gestao'): st.session_state.ir_para_gestao = False
 
 # ⚡ ATUALIZAÇÃO 1: Adicionado o "Atendimento" no menu
@@ -164,7 +175,7 @@ selected = option_menu(
 # ÁREA OPERACIONAL
 # ==============================================================================
 if selected == "Operacional":
-    if not mgr:
+    if not conf.get('empresa_cnpj'):
         st.warning("⚠️ Nenhuma empresa selecionada. Vá em Gestão e selecione uma unidade.")
         st.stop()
     
@@ -200,9 +211,7 @@ if selected == "Operacional":
                 
                 # Botão de Excluir (Adicionado aqui)
                 if st.button(f"🗑️ Excluir", key=f"del_{id_layout}", type="secondary", use_container_width=True):
-                    from src.database import excluir_layout
-                    
-                    if excluir_layout(id_layout):
+                    if mgr.excluir_layout_banco(id_layout):
                         st.toast(f"Banco {nome_layout} excluído!")
                         
                         # PROTEÇÃO: Verificamos se existe algo em layout_ativo antes de dar o .get()
@@ -280,16 +289,34 @@ if selected == "Operacional":
                     st.markdown("##### 🔍 Revisão da Importação")
                     
                     # Verificação de Clientes e Títulos
-                    lista_clientes_nomes = [c['nome'] for c in listar_clientes_db(conf['empresa_cnpj'])]
-                    rows_final = []
+                    lista_clientes_nomes = [c['nome'] for c in listar_clientes_db(conf.get('empresa_cnpj'))]
                     
+                    # 1. Identifica Clientes Novos Únicos
+                    novos_clientes_identificados = sorted(list(set([row['pagador'] for _, row in df_rev.iterrows() if row['pagador'] not in lista_clientes_nomes])))
+                    
+                    dados_novos_clientes = {}
+                    if novos_clientes_identificados:
+                        st.info(f"✨ Identificamos {len(novos_clientes_identificados)} novos clientes. Preencha os dados abaixo uma única vez:")
+                        for cli_nome in novos_clientes_identificados:
+                            with st.expander(f"👤 Cadastro: {cli_nome}", expanded=True):
+                                c_cnpj, c_zap, c_mail = st.columns(3)
+                                cnpj_v = c_cnpj.text_input("CNPJ", key=f"ncnpj_{cli_nome}")
+                                zap_v = c_zap.text_input("WhatsApp", key=f"nzap_{cli_nome}", help="Use ; para separar múltiplos")
+                                mail_v = c_mail.text_input("Email", key=f"nmail_{cli_nome}", help="Use ; para separar múltiplos")
+                                dados_novos_clientes[cli_nome] = {'cnpj': cnpj_v, 'whatsapp': zap_v, 'email': mail_v}
+                        st.divider()
+
+                    rows_final = []
                     for i, row in df_rev.iterrows():
                         nome_pag = row['pagador']
                         existe_cli = nome_pag in lista_clientes_nomes
                         
-                        # Verifica se título existe considerando Número, Pagador e Vencimento
+                        # Se for novo, tenta pegar os dados preenchidos acima
+                        info_extra = dados_novos_clientes.get(nome_pag, {})
+                        
+                        # Verifica se título existe
                         from src.database import conectar
-                        conn = conectar()
+                        conn = conectar(conf.get('empresa_cnpj'))
                         exists_tit = conn.cursor().execute(
                             "SELECT status FROM titulos WHERE numero_nf=? AND pagador=? AND vencimento=?", 
                             (row['numero'], nome_pag, row['vencimento'])
@@ -303,23 +330,28 @@ if selected == "Operacional":
                             "Número": row['numero'],
                             "Vencimento": row['vencimento'],
                             "Valor": row['valor'],
-                            "Ação Dupli": "Manter Aberto" if not exists_tit else "Manter Aberto", # Default para Manter Aberto
-                            "CNPJ": "",
-                            "WhatsApp": "",
-                            "Email": "",
+                            "Ação Dupli": "Manter Aberto" if not exists_tit else "Manter Aberto",
+                            "CNPJ": info_extra.get('cnpj', ""),
+                            "WhatsApp": info_extra.get('whatsapp', ""),
+                            "Email": info_extra.get('email', ""),
                             "Contato": ""
                         })
                     
                     df_final_rev = pd.DataFrame(rows_final)
+                    st.markdown("##### 🧾 Títulos Carregados")
                     edited_df = st.data_editor(df_final_rev, hide_index=True, width="stretch", key="import_editor")
                     
                     if st.button("🚀 Confirmar e Salvar no Banco", type="primary"):
+                        # Primeiro, cadastra todos os novos clientes únicos UMA VEZ
+                        clientes_cadastrados_nesta_sessao = set()
+                        
                         for _, r in edited_df.iterrows():
-                            # Se for novo cliente, cadastra primeiro
-                            if r['Status'] == "Novo Cliente":
+                            # Cadastro do cliente (apenas se for Novo Cliente e ainda não cadastrado nesta submissão)
+                            if r['Status'] == "Novo Cliente" and r['Pagador'] not in clientes_cadastrados_nesta_sessao:
                                 mgr.cadastrar_cliente_completo(r['Pagador'], r['CNPJ'], r['WhatsApp'], r['Email'], r['Contato'])
+                                clientes_cadastrados_nesta_sessao.add(r['Pagador'])
                             
-                            # Salva o título
+                            # Preparação do título
                             t_data = {
                                 'pagador': r['Pagador'],
                                 'numero': r['Número'],
@@ -328,9 +360,8 @@ if selected == "Operacional":
                             }
                             
                             if r['Status'] == "Título Duplicado":
-                                # Atualiza status conforme escolha
                                 from src.database import conectar
-                                conn = conectar()
+                                conn = conectar(conf.get('empresa_cnpj'))
                                 conn.cursor().execute(
                                     "UPDATE titulos SET status=? WHERE numero_nf=? AND pagador=? AND vencimento=?", 
                                     ("Aberto" if r['Ação Dupli'] == "Manter Aberto" else r['Ação Dupli'], r['Número'], r['Pagador'], r['Vencimento'])
@@ -338,7 +369,7 @@ if selected == "Operacional":
                                 conn.commit()
                                 conn.close()
                             else:
-                                salvar_dados_no_banco([t_data], conf['empresa_cnpj'])
+                                salvar_dados_no_banco(conf.get('empresa_cnpj'), [t_data])
                                 
                         st.success("Operação concluída com sucesso!"); time.sleep(1); st.rerun()
 
@@ -348,7 +379,7 @@ if selected == "Operacional":
         
         # Filtro de Cliente
         cli_search = st.text_input("🔍 Procurar Cliente (Nome ou CNPJ)")
-        lista_clientes = listar_clientes_db(conf['empresa_cnpj'])
+        lista_clientes = listar_clientes_db(conf.get('empresa_cnpj'))
         
         selected_cli = None
         if cli_search:
@@ -395,16 +426,16 @@ if selected == "Operacional":
                         })
                 
                 if titulos_final:
-                    salvar_dados_no_banco(titulos_final, conf['empresa_cnpj'])
+                    salvar_dados_no_banco(conf.get('empresa_cnpj'), titulos_final)
                     st.success(f"{len(titulos_final)} títulos lançados!"); time.sleep(1)
                     st.session_state.linhas_manuais = [{'numero_nf': '', 'vencimento': datetime.date.today(), 'valor': 0.0}]
                     st.rerun()
 
     # Helper para Cobrança
-    def processar_cobranca_cliente(cli_nome, cli_info, user, is_simulacao):
+    def processar_cobranca_cliente(cli_nome, cli_info, user, is_simulacao, canais):
         msg = mgr.gerar_mensagem_cobranca(cli_nome, cli_info['dados_cliente'], cli_info['total'], cli_info['itens'])
         zip_path, temp = mgr.buscar_e_zipar_pdfs(cli_nome, cli_info['itens'])
-        res = mgr.executar_processo_completo_cobranca(cli_nome, msg, zip_path, cli_info['itens'], temp, usuario=user, simulacao=is_simulacao)
+        res = mgr.executar_processo_completo_cobranca(cli_nome, msg, zip_path, cli_info['itens'], temp, usuario=user, simulacao=is_simulacao, canais_selecionados=canais)
         return res
 
     # --- ABA 3: COBRANÇA ---
@@ -412,17 +443,21 @@ if selected == "Operacional":
         user_logado = st.session_state.get('usuario_atual')
         rel = mgr.agrupar_debitos_por_cliente()
         if rel:
-            c1, c2 = st.columns([2, 1])
-            is_sim = c1.checkbox("🧪 Modo Simulação (Não envia mensagens reais)", value=False)
-            
-            if c2.button("🚀 Enviar Cobranças para TODOS", type="primary", use_container_width=True):
-                progress_bar = st.progress(0)
-                st.info(f"Iniciando envio para {len(rel)} clientes...")
-                for i, (cli, info) in enumerate(rel.items()):
-                    processar_cobranca_cliente(cli, info, user_logado, is_sim)
-                    progress_bar.progress((i + 1) / len(rel))
-                st.success("✅ Processo em massa concluído!")
-                time.sleep(1); st.rerun()
+            c1, c2, c3 = st.columns([1.5, 1.5, 1])
+            is_sim = c1.checkbox("🧪 Modo Simulação", value=False)
+            canais_sel = c2.multiselect("Canais de Envio", ["Email", "WhatsApp"], default=["Email", "WhatsApp"])
+            canais_slugs = [c.lower() for c in canais_sel] if canais_sel else []
+
+            if c3.button("🚀 Enviar TODOS", type="primary", use_container_width=True):
+                if not canais_slugs:
+                    st.warning("Selecione ao menos um canal.")
+                else:
+                    progress_bar = st.progress(0)
+                    st.info(f"Iniciando envio para {len(rel)} clientes...")
+                    for i, (cli, info) in enumerate(rel.items()):
+                        processar_cobranca_cliente(cli, info, user_logado, is_sim, canais_slugs)
+                        progress_bar.progress((i + 1) / len(rel))
+                    st.success("✅ Processo em massa concluído!"); time.sleep(1); st.rerun()
 
             st.divider()
             st.markdown(f"### 🚀 Fila: {len(rel)} clientes")
@@ -430,13 +465,16 @@ if selected == "Operacional":
             for cli, info in rel.items():
                 with st.expander(f"🔴 {cli} | R$ {info['total']:,.2f}"):
                     st.dataframe(pd.DataFrame(info['itens']), hide_index=True)
-                    if st.button(f"📧 Enviar Cobrança para {cli}", key=f"btn_{cli}", type="secondary"):
-                        res = processar_cobranca_cliente(cli, info, user_logado, is_sim)
-                        if res['email'] or res['whatsapp']:
-                            label = "Simulado" if is_sim else "Enviada"
-                            st.success(f"Cobrança {label}! (E-mail: {res['email']} | Zap: {res['whatsapp']})")
+                    if st.button(f"🚀 Enviar para {cli}", key=f"btn_{cli}", type="secondary"):
+                        if not canais_slugs:
+                            st.warning("Selecione ao menos um canal.")
                         else:
-                            st.error("Falha no envio. Verifique conexões.")
+                            res = processar_cobranca_cliente(cli, info, user_logado, is_sim, canais_slugs)
+                            if res['email'] or res['whatsapp']:
+                                label = "Simulado" if is_sim else "Enviada"
+                                st.success(f"Cobrança {label}! (E-mail: {'OK' if res['email'] else 'Não'} | Zap: {'OK' if res['whatsapp'] else 'Não'})")
+                            else:
+                                st.error("Falha no envio. Verifique conexões ou canais.")
         else:
             st.info("✅ Tudo em dia! Nenhuma cobrança pendente.")
 
@@ -447,7 +485,7 @@ if selected == "Operacional":
         c1, c2 = st.columns([3, 1])
         filtro_crm = c1.text_input("🔍 Filtrar Cliente (Nome ou CNPJ)", key="crm_filter")
         
-        all_clis = listar_clientes_db(conf['empresa_cnpj'])
+        all_clis = listar_clientes_db(conf.get('empresa_cnpj'))
         if filtro_crm:
             all_clis = [c for c in all_clis if filtro_crm.lower() in c['nome'].lower() or filtro_crm in c['cnpj']]
             
@@ -498,7 +536,7 @@ if selected == "Operacional":
                     nome_usu = user_logado.get('nome_completo', 'Operador') if isinstance(user_logado, dict) else str(user_logado)
                     
                     for _, r in clis_to_del.iterrows():
-                        excluir_cliente_db(r['id'], r['nome'], usuario=nome_usu)
+                        excluir_cliente_db(conf.get('empresa_cnpj'), r['id'], r['nome'], usuario=nome_usu)
                     
                     st.session_state.confirmar_exclusao_crm = False
                     st.success("Clientes excluídos com sucesso!")
@@ -513,19 +551,57 @@ if selected == "Operacional":
             cli_sel_tit = st.selectbox("Selecione um cliente para ver todos os títulos", ["--"] + [c['nome'] for c in all_clis])
             
             if cli_sel_tit != "--":
-                tits = listar_titulos_por_cliente(cli_sel_tit, conf['empresa_cnpj'])
+                tits = listar_titulos_por_cliente(conf.get('empresa_cnpj'), cli_sel_tit)
                 if tits:
-                    df_tits = pd.DataFrame(tits)
+                    if 'df_tits_edit' not in st.session_state or st.session_state.get('last_cli_tits') != cli_sel_tit:
+                        df_init = pd.DataFrame(tits)
+                        df_init.insert(0, 'Selecionar', False)
+                        st.session_state.df_tits_edit = df_init
+                        st.session_state.last_cli_tits = cli_sel_tit
+
                     st.write(f"Títulos de {cli_sel_tit}:")
+                    
+                    # --- FERRAMENTAS EM MASSA ---
+                    with st.expander("⚡ Ações em Massa", expanded=False):
+                        c1, c2, c3, c4 = st.columns([1, 1.5, 1.5, 1])
+                        if c1.button("✅ Sel. Todos"):
+                            st.session_state.df_tits_edit['Selecionar'] = True
+                            st.rerun()
+                        if c1.button("❌ Limpar Sel."):
+                            st.session_state.df_tits_edit['Selecionar'] = False
+                            st.rerun()
+                        
+                        m_status = c2.selectbox("Mudar Status para:", ["Permanecer"] + ["Aberto", "Pago", "Negociado", "Cartório", "Baixado"])
+                        m_acao = c3.selectbox("Mudar Ação para:", ["Permanecer"] + ["Cobrar", "Pausar"])
+                        
+                        if c4.button("🚀 Aplicar", use_container_width=True):
+                            mask = st.session_state.df_tits_edit['Selecionar']
+                            if mask.any():
+                                if m_status != "Permanecer":
+                                    st.session_state.df_tits_edit.loc[mask, 'status'] = m_status
+                                if m_acao != "Permanecer":
+                                    st.session_state.df_tits_edit.loc[mask, 'acao'] = m_acao
+                                st.success("Aplicado! Salve para confirmar no banco.")
+                                time.sleep(0.5); st.rerun()
+                            else:
+                                st.warning("Selecione títulos primeiro.")
+
                     # Editor para mudar status manualmente (Pago, Aberto, etc)
                     edited_tits = st.data_editor(
-                        df_tits, 
+                        st.session_state.df_tits_edit, 
                         hide_index=True, 
                         width="stretch",
-                                                 column_config={
-                                                     "status": st.column_config.SelectboxColumn("Status", options=["Aberto", "Pago", "Negociado", "Cartório", "Baixado"]),
-                                                     "acao": st.column_config.SelectboxColumn("Ação", options=["Cobrar", "Pausar"])
-                                                 })
+                        column_config={
+                            "Selecionar": st.column_config.CheckboxColumn("Sel", default=False),
+                            "status": st.column_config.SelectboxColumn("Status", options=["Aberto", "Pago", "Negociado", "Cartório", "Baixado"]),
+                            "acao": st.column_config.SelectboxColumn("Ação", options=["Cobrar", "Pausar"]),
+                            "id": None
+                        }
+                    )
+                    
+                    # Atualiza o estado da sessão com as edições manuais no editor
+                    st.session_state.df_tits_edit = edited_tits
+
                     if st.button("💾 Salvar Situação dos Títulos"):
                         user_logado = st.session_state.get('usuario_atual')
                         for _, r in edited_tits.iterrows():
@@ -543,23 +619,41 @@ if selected == "Operacional":
         st.markdown("Gere relatórios em PDF para conferência e auditoria.")
         
         with st.form("form_rel"):
-            c1, c2, c3 = st.columns(3)
-            r_cli = c1.selectbox("Filtrar por Cliente", ["Todos"] + [c['nome'] for c in listar_clientes_db(conf['empresa_cnpj'])])
-            r_ini = c2.date_input("Data Início", value=datetime.date.today() - datetime.timedelta(days=30))
-            r_fim = c3.date_input("Data Fim")
+            c1, c2, c3, c4 = st.columns(4)
+            r_cli = c1.selectbox("Filtrar por Cliente", ["Todos"] + [c['nome'] for c in listar_clientes_db(conf.get('empresa_cnpj'))])
+            r_ini = c2.date_input("Data Início", value=datetime.date.today(), format="DD/MM/YYYY")
+            r_fim = c3.date_input("Data Fim", format="DD/MM/YYYY")
+            r_tipo = c4.selectbox("Tipo de Registro", ["Todos", "Cobranças", "Exclusões", "Pagos"])
             
-            if st.form_submit_button("📄 Gerar Relatório de Cobranças"):
-                filtros = {
-                    "cliente": r_cli if r_cli != "Todos" else None,
-                    "data_inicio": r_ini.strftime("%Y-%m-%d"),
-                    "data_fim": r_fim.strftime("%Y-%m-%d")
-                }
+            # Botão de SUBMIT do form
+            submit_rel = st.form_submit_button("📊 Processar Dados do Relatório")
+
+        # Lógica de geração e download FORA do form
+        if submit_rel:
+            filtros = {
+                "cliente": r_cli if r_cli != "Todos" else None,
+                "data_inicio": r_ini.strftime("%Y-%m-%d"),
+                "data_fim": r_fim.strftime("%Y-%m-%d"),
+                "tipo": r_tipo
+            }
+            with st.spinner("Gerando PDF..."):
                 path = mgr.gerar_relatorio_pdf_cobrancas(filtros)
                 if path and os.path.exists(path):
-                    with open(path, "rb") as f:
-                        st.download_button("📥 Baixar PDF do Relatório", f, file_name=os.path.basename(path), mime="application/pdf")
+                    st.session_state.ultimo_relatorio = path
                 else:
                     st.warning("Nenhum dado encontrado para os filtros selecionados.")
+
+        # Exibe o botão de download se houver um relatório pronto
+        if st.session_state.get('ultimo_relatorio'):
+            path = st.session_state.ultimo_relatorio
+            with open(path, "rb") as f:
+                st.download_button(
+                    label="📥 Baixar PDF do Relatório",
+                    data=f,
+                    file_name=os.path.basename(path),
+                    mime="application/pdf",
+                    key="btn_dl_rel"
+                )
 
 # ==============================================================================
 # ÁREA DE ATENDIMENTO OMNICHANNEL (NOVO)
@@ -610,14 +704,61 @@ elif selected == "Atendimento":
 # GESTÃO
 # ==============================================================================
 elif selected == "Gestão":
-    st.subheader("🏢 Unidades")
+    st.subheader("🏢 Gestão de Unidades")
+    
+    with st.expander("➕ Cadastrar Nova Unidade"):
+        with st.form("form_nova_unidade"):
+            n_nome = st.text_input("Nome da Empresa/Unidade")
+            n_cnpj = st.text_input("CNPJ (Apenas números)")
+            if st.form_submit_button("Cadastrar"):
+                if n_nome and n_cnpj:
+                    sucesso, msg = cadastrar_unidade_central(n_nome, n_cnpj)
+                    if sucesso:
+                        st.success(msg)
+                        st.rerun()
+                    else:
+                        st.error(msg)
+                else:
+                    st.warning("Preencha todos os campos.")
+
+    st.divider()
     unidades = carregar_todas_unidades_db()
-    cols = st.columns(3)
-    for i, u in enumerate(unidades):
-        with cols[i % 3]:
-            with st.container(border=True):
-                st.markdown(f"**{u['empresa_nome']}**")
-                st.button("Acessar", key=f"go_{u['id']}", on_click=ativar_empresa, args=(u,), use_container_width=True)
+    
+    if not unidades:
+        st.info("Nenhuma unidade cadastrada.")
+    else:
+        cols = st.columns(3)
+        for i, u in enumerate(unidades):
+            with cols[i % 3]:
+                with st.container(border=True):
+                    st.markdown(f"**{u['empresa_nome']}**")
+                    st.caption(f"CNPJ: {u['empresa_cnpj']}")
+                    if st.button("Acessar Unidade", key=f"go_{u['id']}", use_container_width=True):
+                        # Carrega config específica
+                        conf_empresa = carregar_configuracoes_db(u['empresa_cnpj'])
+                        # Garante que o CNPJ esteja na config
+                        conf_empresa['empresa_cnpj'] = u['empresa_cnpj']
+                        conf_empresa['empresa_nome'] = u['empresa_nome']
+                        
+                        ativar_empresa(conf_empresa)
+                        st.success(f"Acessando {u['empresa_nome']}...")
+                        time.sleep(1)
+                        st.rerun()
+
+                    with st.popover("🗑️ Excluir", use_container_width=True):
+                        st.warning(f"Deseja realmente excluir {u['empresa_nome']}?")
+                        st.caption("Isso apagará permanentemente todos os clientes, títulos e configurações desta unidade.")
+                        if st.button("Confirmar Exclusão", key=f"del_unit_{u['id']}", type="primary", use_container_width=True):
+                            sucesso, msg = excluir_unidade_central(u['empresa_cnpj'])
+                            if sucesso:
+                                st.success(msg)
+                                # Se a empresa excluída era a ativa, limpa a sessão
+                                if st.session_state.config.get('empresa_cnpj') == u['empresa_cnpj']:
+                                    st.session_state.config = {}
+                                time.sleep(1)
+                                st.rerun()
+                            else:
+                                st.error(msg)
 
 # ==============================================================================
 # CONFIGURAÇÕES
@@ -647,8 +788,21 @@ elif selected == "Configurações":
                 nome_f = st.text_input("Razão Social / Nome Fantasia", value=conf.get('empresa_nome', ''))
                 cnpj_f = st.text_input("CNPJ", value=conf.get('empresa_cnpj', ''))
                 
-                if st.form_submit_button("💾 Salvar Dados da Empresa"):
-                    updates = {"empresa_nome": nome_f, "empresa_cnpj": cnpj_f}
+                st.markdown("---")
+                st.markdown("#### ⚙️ Regras Financeiras (CDC)")
+                c_tax1, c_tax2, c_tax3 = st.columns(3)
+                multa_f = c_tax1.number_input("Multa por Atraso (%)", value=float(conf.get('multa_fixed', 2.0)), step=0.5)
+                juros_f = c_tax2.number_input("Juros Mensais (%)", value=float(conf.get('juros_mensal', 1.0)), step=0.1)
+                prazo_cart = c_tax3.number_input("Dias p/ Cartório", value=int(conf.get('dias_para_cartorio', 10)), step=1)
+                
+                if st.form_submit_button("💾 Salvar Dados e Regras da Empresa"):
+                    updates = {
+                        "empresa_nome": nome_f, 
+                        "empresa_cnpj": cnpj_f,
+                        "multa_fixed": multa_f,
+                        "juros_mensal": juros_f,
+                        "dias_para_cartorio": prazo_cart
+                    }
                     
                     if nova_logo:
                         import base64
@@ -656,8 +810,8 @@ elif selected == "Configurações":
                         updates["logo_b64"] = b64_logo
                     
                     st.session_state.config.update(updates)
-                    salvar_configuracoes_db(st.session_state.config)
-                    st.success("Dados da empresa atualizados!")
+                    salvar_configuracoes_db(conf.get('empresa_cnpj'), st.session_state.config)
+                    st.success("Dados e regras atualizados!")
                     st.rerun()
 
     with ct2:
@@ -748,7 +902,8 @@ elif selected == "Configurações":
         st.write("Conecte seu WhatsApp para habilitar o robô de disparo.")
         st.divider()
 
-        nome_instancia = conf.get('empresa_cnpj', 'Instancia_Padrao').replace('.', '').replace('/', '').replace('-', '')
+        cnpj_raw = conf.get('empresa_cnpj') or 'Instancia_Padrao'
+        nome_instancia = str(cnpj_raw).replace('.', '').replace('/', '').replace('-', '')
         evo = EvolutionController(config=st.session_state.config, nome_empresa_cliente=nome_instancia)
         
         with st.spinner("Verificando status..."):
@@ -777,7 +932,7 @@ elif selected == "Configurações":
                     with st.spinner("Criando servidor do WhatsApp..."):
                         res_criacao = evo.criar_instancia()
                         
-                        if "error" in res_criacao and "already exists" not in str(res_criacao).lower():
+                        if "error" in res_criacao and "already exists" not in str(res_criacao).lower() and "already in use" not in str(res_criacao).lower():
                             st.error(f"Erro na Evolution: {res_criacao['error']}")
                         else:
                             st.session_state.mostrar_qr = True
@@ -837,7 +992,7 @@ elif selected == "Configurações":
                     "fin_mail_user": f_u, 
                     "fin_mail_pass": f_p
                 }
-                salvar_configuracoes_db(updates)
+                salvar_configuracoes_db(conf.get('empresa_cnpj'), updates)
                 st.session_state.config.update(updates)
                 st.success("Configurações salvas!")
                 time.sleep(1)
@@ -911,7 +1066,7 @@ elif selected == "Configurações":
             
             if st.form_submit_button("💾 Salvar IA"):
                 st.session_state.config.update({"gemini_api_key": gemini_key})
-                salvar_configuracoes_db(st.session_state.config)
+                salvar_configuracoes_db(conf.get('empresa_cnpj'), st.session_state.config)
                 hora_formatada = hora_envio.strftime("%H:%M")
                 mgr.salvar_config_agendamento(dias_sel, hora_formatada, ignorar_feriados, c_on)
                 st.success("Configuração salva com sucesso!"); st.rerun()
@@ -938,14 +1093,18 @@ elif selected == "Configurações":
                             col_res.success("🤖 (SIMULADO): SISTEMA IA ONLINE")
                         else:
                             col_res.error(f"Erro: {e}")
-# --- WIZARD NOVO CADASTRO ---
-if st.session_state.get('novo_cadastro', False):
+# --- WIZARD NOVO CADASTRO (Apenas se o sistema estiver vazio e não estivermos na aba Gestão) ---
+if st.session_state.get('novo_cadastro', False) and selected != "Gestão":
     st.markdown("---")
     with st.form("wiz"):
         st.subheader("🧙‍♂️ Nova Empresa")
         n = st.text_input("Nome Fantasia")
         c = st.text_input("CNPJ")
         if st.form_submit_button("Salvar Empresa"):
-            st.session_state.config.update({"empresa_nome": n, "empresa_cnpj": c})
-            salvar_configuracoes_db(st.session_state.config)
-            st.session_state.novo_cadastro = False; st.rerun()
+            if n and c:
+                cadastrar_unidade_central(n, c)
+                st.session_state.config.update({"empresa_nome": n, "empresa_cnpj": c})
+                salvar_configuracoes_db(c, st.session_state.config)
+                st.session_state.novo_cadastro = False; st.rerun()
+            else:
+                st.error("Preencha Nome e CNPJ.")
