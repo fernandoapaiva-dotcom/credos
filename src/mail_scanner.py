@@ -68,10 +68,10 @@ class MailScanner:
         
         return texto_completo
 
-    def validar_arquivo_pertence_cliente(self, filepath, cnpj_alvo, nome_alvo, vencimento_alvo=None, valor_alvo=None):
+    def validar_arquivo_pertence_cliente(self, filepath, cnpj_alvo, nome_alvo, vencimento_alvo=None, valor_alvo=None, nf_alvo=None):
         """
         Retorna TRUE se encontrar o CNPJ ou parte do NOME no arquivo.
-        Também valida Vencimento e Valor se fornecidos.
+        Também valida Vencimento, Valor e Número da NF se fornecidos.
         """
         texto = self._extrair_texto_arquivo(filepath)
         
@@ -120,6 +120,13 @@ class MailScanner:
             if valor_str in texto or f"{valor_alvo:.2f}" in texto:
                 matches += 1
                 print(f"   ✅ Valor OK")
+
+        # 5. Validação por Número da NF
+        if nf_alvo:
+            checks += 1
+            if str(nf_alvo) in texto:
+                matches += 1
+                print(f"   ✅ Número NF OK")
 
         # Se bateu o CNPJ já é suficiente, ou se bateu pelo menos 2 critérios
         if cnpj_alvo and (re.sub(r'\D', '', str(cnpj_alvo)) in texto_limpo):
@@ -196,7 +203,7 @@ class MailScanner:
                                         if fpath.endswith('.zip'):
                                             arquivos_baixados.append(fpath)
                                         else:
-                                            eh_valido = self.validar_arquivo_pertence_cliente(fpath, cnpj_cliente, nome_cliente)
+                                            eh_valido = self.validar_arquivo_pertence_cliente(fpath, cnpj_cliente, nome_cliente, vencimento, valor, nf_str)
                                             if eh_valido:
                                                 arquivos_baixados.append(fpath)
                                             else:
