@@ -1,0 +1,77 @@
+import React from 'react';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { AuthProvider, useAuth } from './context/AuthContext';
+import { ThemeProvider } from './context/ThemeContext';
+import { Login } from './pages/Login';
+import { Companies } from './pages/Companies';
+import { Dashboard } from './pages/Dashboard';
+import { CRM } from './pages/CRM';
+import { ImportPDF } from './pages/ImportPDF';
+import { Reports } from './pages/Reports';
+import { Settings } from './pages/Settings';
+
+const PrivateRoute: React.FC<{ children: React.ReactNode, requireCompany?: boolean }> = ({ children, requireCompany }) => {
+  const { user, companyCnpj } = useAuth();
+  
+  if (!user) return <Navigate to="/login" replace />;
+  
+  if (requireCompany && !companyCnpj) {
+    return <Navigate to="/companies" replace />;
+  }
+  
+  return <>{children}</>;
+};
+
+function App() {
+  return (
+    <ThemeProvider>
+      <AuthProvider>
+        <BrowserRouter>
+          <Routes>
+            <Route path="/login" element={<Login />} />
+            
+            <Route path="/companies" element={
+              <PrivateRoute>
+                <Companies />
+              </PrivateRoute>
+            } />
+            
+            <Route path="/dashboard" element={
+              <PrivateRoute requireCompany>
+                <Dashboard />
+              </PrivateRoute>
+            } />
+
+            <Route path="/crm" element={
+              <PrivateRoute requireCompany>
+                <CRM />
+              </PrivateRoute>
+            } />
+
+            <Route path="/import" element={
+              <PrivateRoute requireCompany>
+                <ImportPDF />
+              </PrivateRoute>
+            } />
+
+            <Route path="/reports" element={
+              <PrivateRoute requireCompany>
+                <Reports />
+              </PrivateRoute>
+            } />
+
+            <Route path="/settings" element={
+              <PrivateRoute requireCompany>
+                <Settings />
+              </PrivateRoute>
+            } />
+            
+            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+          </Routes>
+        </BrowserRouter>
+      </AuthProvider>
+    </ThemeProvider>
+  );
+}
+
+export default App;

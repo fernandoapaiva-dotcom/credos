@@ -28,14 +28,30 @@ def disparar_cobranca_automatica(forcar_execucao=False):
         # Verifica se hoje é dia de executar (se não for forçado manualmente)
         if not forcar_execucao:
             hoje_semana = datetime.now().weekday() # 0=Segunda ... 6=Domingo
-            # Converte string "0,2,4" para lista de inteiros
+            hora_atual = datetime.now().strftime("%H:%M")
+            
+            # Converte string "['Segunda']" para lista e mapeia para numero, ou pega string brutos
+            # Ajuste de robustez para dias salvos como JSON array de strings no novo sistema
+            import json
+            mapping_dias = {'Segunda':0, 'Terça':1, 'Quarta':2, 'Quinta':3, 'Sexta':4, 'Sábado':5, 'Domingo':6}
+            
             try:
-                dias_permitidos = [int(d) for d in ag['dias_semana'].split(",") if d.strip()]
+                raw_dias = ag.get('dias_ui', '[]')
+                if '[' in raw_dias:
+                    dias_nomes = json.loads(raw_dias)
+                    dias_permitidos = [mapping_dias.get(d) for d in dias_nomes if mapping_dias.get(d) is not None]
+                else:
+                    dias_permitidos = [int(d) for d in raw_dias.split(",") if d.strip()]
             except:
                 dias_permitidos = []
             
             if hoje_semana not in dias_permitidos:
                 print(f"⏩ Pulando {cnpj_empresa}: Hoje não está na agenda.")
+                continue
+                
+            horario_esperado = ag.get('horario_envio', '09:00')
+            if hora_atual != horario_esperado:
+                print(f"⏳ Pulando {cnpj_empresa}: Horário previsto é {horario_esperado}, agora são {hora_atual}.")
                 continue
 
         # Inicia o Gerente para esta empresa específica

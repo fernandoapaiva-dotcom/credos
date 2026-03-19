@@ -7,10 +7,10 @@ class EvolutionController:
     def __init__(self, config=None, nome_empresa_cliente=None):
         config = config or {}
         
-        # Ajustado para ler EXATAMENTE as chaves do seu .env
-        url_raw = os.getenv('SERVER_URL') or config.get('evo_url') or ''
-        key_raw = os.getenv('AUTHENTICATION_API_KEY') or config.get('evo_key') or ''
-        ##key_raw = "42a24fa6-403d-4c7b-b30a-9359e9a4f783"
+        # Prioritize Database config so user can change it via UI
+        url_raw = config.get('evo_url') or os.getenv('SERVER_URL') or ''
+        key_raw = config.get('evo_key') or os.getenv('AUTHENTICATION_API_KEY') or ''
+        
         self.url = url_raw.strip().rstrip('/')
         if self.url and not self.url.startswith('http'):
             self.url = 'http://' + self.url
@@ -68,6 +68,8 @@ class EvolutionController:
             
             if r.status_code in [200, 201]: 
                 return r.json()
+            elif r.status_code == 403 and "already in use" in r.text:
+                return {"message": "already exists"}
             else:
                 self.debug_log("Erro ao Criar", endpoint, r)
                 return {"error": r.text}
@@ -101,18 +103,24 @@ class EvolutionController:
             
             if r.status_code == 200:
                 dados = r.json()
-                # 1. Tenta pegar a chave 'base64' (mais comum nas versões novas)
-                qr = dados.get('base64')
-                # 2. Se não achar, tenta a chave 'code' (comum em versões antigas)
-                if not qr:
-                    qr = dados.get('code')
+                print(f"DEBUG QR: {str(dados)[:200]}") # Log de segurança para debugar formato
                 
-                # Se o que veio foi apenas a string base64 sem o cabeçalho, nós adicionamos
-                if qr and isinstance(qr, str) and not qr.startswith('data:image'):
-                    qr = f"data:image/png;base64,{qr}"
+                # Ordem de preferência: base64, qrcode, code
+                qr = dados.get('base64') or dados.get('qrcode') or dados.get('code')
                 
-                return qr
-            
+                if qr and isinstance(qr, str):
+                    # Formato novo (v2.3+): muitas vezes vem "texto_qr,hash,base64_imagem"
+                    if ',' in qr:
+                        partes = qr.split(',')
+                        # Pegamos o maior pedaço, que certamente é a imagem base64
+                        qr = max(partes, key=len)
+
+                    # Se for o código raw (ex: 2@...), ele não serve para o <img> diretamente
+                    # Mas se for base64, garantimos o prefixo
+                    if not qr.startswith('data:image') and len(qr) > 100:
+                        qr = f"data:image/png;base64,{qr}"
+                    return qr
+                
             self.debug_log("Erro ao Buscar QR", endpoint, r)
             return None
         except Exception as e:

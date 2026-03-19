@@ -299,11 +299,12 @@ if selected == "Operacional":
                         st.info(f"✨ Identificamos {len(novos_clientes_identificados)} novos clientes. Preencha os dados abaixo uma única vez:")
                         for cli_nome in novos_clientes_identificados:
                             with st.expander(f"👤 Cadastro: {cli_nome}", expanded=True):
-                                c_cnpj, c_zap, c_mail = st.columns(3)
+                                c_cnpj, c_zap, c_mail, c_cont = st.columns(4)
                                 cnpj_v = c_cnpj.text_input("CNPJ", key=f"ncnpj_{cli_nome}")
                                 zap_v = c_zap.text_input("WhatsApp", key=f"nzap_{cli_nome}", help="Use ; para separar múltiplos")
                                 mail_v = c_mail.text_input("Email", key=f"nmail_{cli_nome}", help="Use ; para separar múltiplos")
-                                dados_novos_clientes[cli_nome] = {'cnpj': cnpj_v, 'whatsapp': zap_v, 'email': mail_v}
+                                cont_v = c_cont.text_input("Contato", key=f"ncont_{cli_nome}")
+                                dados_novos_clientes[cli_nome] = {'cnpj': cnpj_v, 'whatsapp': zap_v, 'email': mail_v, 'contato': cont_v}
                         st.divider()
 
                     rows_final = []
@@ -334,7 +335,7 @@ if selected == "Operacional":
                             "CNPJ": info_extra.get('cnpj', ""),
                             "WhatsApp": info_extra.get('whatsapp', ""),
                             "Email": info_extra.get('email', ""),
-                            "Contato": ""
+                            "Contato": info_extra.get('contato', "")
                         })
                     
                     df_final_rev = pd.DataFrame(rows_final)
@@ -623,7 +624,7 @@ if selected == "Operacional":
             r_cli = c1.selectbox("Filtrar por Cliente", ["Todos"] + [c['nome'] for c in listar_clientes_db(conf.get('empresa_cnpj'))])
             r_ini = c2.date_input("Data Início", value=datetime.date.today(), format="DD/MM/YYYY")
             r_fim = c3.date_input("Data Fim", format="DD/MM/YYYY")
-            r_tipo = c4.selectbox("Tipo de Registro", ["Todos", "Cobranças", "Exclusões", "Pagos"])
+            r_tipo = c4.selectbox("Tipo de Registro", ["Todos", "Cobranças", "Exclusões", "Pagos", "Títulos em Aberto"])
             
             # Botão de SUBMIT do form
             submit_rel = st.form_submit_button("📊 Processar Dados do Relatório")

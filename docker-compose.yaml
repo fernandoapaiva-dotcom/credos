@@ -23,6 +23,29 @@ services:
     networks:
       - evolution_network
 
+  evolution:
+    image: evoapicloud/evolution-api:latest
+    container_name: evolution_api
+    restart: always
+    environment:
+      - SERVER_URL=http://localhost:8080
+      - DOCKER_RESTART_POLICY=always
+      - AUTHENTICATION_TYPE=apikey
+      - AUTHENTICATION_API_KEY=42a24fa6-403d-4c7b-b30a-9359e9a4f783
+      - DATABASE_PROVIDER=postgresql
+      - DATABASE_CONNECTION_URI=postgresql://evolution_user:evolution_password@evolution_db:5432/evolution_db?schema=public
+      - DATABASE_CONNECTION_CLIENT_NAME=evolution_api
+      - CACHE_REDIS_ENABLED=false
+      - CACHE_LOCAL_ENABLED=true
+      - CACHE_REDIS_URI=redis://evolution_redis:6379
+    ports:
+      - "8080:8080"
+    depends_on:
+      - evolution_db
+      - evolution_redis
+    networks:
+      - evolution_network
+
 networks:
   evolution_network:
     driver: bridge

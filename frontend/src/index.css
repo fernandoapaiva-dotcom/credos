@@ -1,0 +1,62 @@
+@import "tailwindcss";
+
+/* Habilitar modo escuro baseado na classe .dark no HTML */
+@custom-variant dark (&:where(.dark, .dark *));
+
+
+@theme {
+  --color-primary-50: #eff6ff;
+  --color-primary-100: #dbeafe;
+  --color-primary-200: #bfdbfe;
+  --color-primary-500: #3b82f6;
+  --color-primary-600: #2563eb;
+  --color-primary-900: #1e3a8a;
+  
+  --color-dark-bg: #0b141a;
+  --color-dark-surface: #111b21;
+  --color-dark-border: #222d34;
+
+  --animate-fade-in: fadeIn 0.5s ease-in-out;
+  --animate-slide-up: slideUp 0.4s ease-out;
+
+  @keyframes fadeIn {
+    0% { opacity: 0; }
+    100% { opacity: 1; }
+  }
+  @keyframes slideUp {
+    0% { transform: translateY(10px); opacity: 0; }
+    100% { transform: translateY(0); opacity: 1; }
+  }
+}
+
+@layer base {
+  body {
+    @apply bg-slate-50 text-slate-900 transition-colors duration-300;
+  }
+  
+  .dark body {
+    @apply bg-dark-bg text-slate-100;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply inline-flex items-center justify-center px-4 py-2 bg-primary-600 text-white font-medium rounded-lg hover:bg-primary-500 transition-colors shadow-sm focus:ring-2 focus:ring-primary-500 focus:ring-offset-2;
+  }
+  
+  .btn-secondary {
+    @apply inline-flex items-center justify-center px-4 py-2 bg-white text-slate-700 font-medium rounded-lg border border-slate-300 hover:bg-slate-50 transition-colors shadow-sm focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:bg-dark-surface dark:text-slate-200 dark:border-dark-border dark:hover:bg-gray-800;
+  }
+  
+  .card {
+    @apply bg-white rounded-xl shadow-sm border border-slate-200 p-6 dark:bg-dark-surface dark:border-dark-border;
+  }
+  
+  .glass-panel {
+    @apply bg-white/80 backdrop-blur-md border border-white/20 shadow-lg dark:bg-dark-surface/80 dark:border-white/10;
+  }
+
+  .input-field {
+    @apply w-full px-4 py-2 rounded-lg border border-slate-300 bg-white focus:border-primary-500 focus:ring-2 focus:ring-blue-200 transition-all outline-none dark:bg-dark-bg dark:border-dark-border dark:text-white dark:focus:ring-primary-900;
+  }
+}
