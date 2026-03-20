@@ -16,7 +16,7 @@ export const Reports: React.FC = () => {
   // Form
   const [cliente, setCliente] = useState('Todos');
   const [dataInicio, setDataInicio] = useState(new Date().toISOString().split('T')[0]);
-  const [dataFim, setDataFim] = useState('');
+  const [dataFim, setDataFim] = useState(new Date().toISOString().split('T')[0]);
   const [tipo, setTipo] = useState('Todos');
 
   useEffect(() => {
@@ -103,13 +103,15 @@ export const Reports: React.FC = () => {
             <div className="space-y-2">
               <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Status / Operação</label>
               <select className="input-field py-2.5" value={tipo} onChange={e => setTipo(e.target.value)}>
-                <option value="Todos">Todos</option>
-                <option value="Títulos em Aberto">Em Aberto</option>
-                <option value="Pagos">Pagos</option>
-                <option value="Negociados">Negociados</option>
-                <option value="Cartório">Em Cartório</option>
-                <option value="Baixados">Títulos Baixados</option>
-                <option value="Exclusões">Histórico de Exclusões</option>
+                {/* Status dos Títulos */}
+                <option value="Todos">Todos os Títulos</option>
+                <option value="Aberto">Títulos em Aberto</option>
+                <option value="Pagos">Títulos Pagos / Baixados</option>
+                <option value="Cartório">Títulos em Cartório</option>
+                {/* Relatórios de Atividade */}
+                <option value="Cobrados">Atividades do Período (Cobranças + Movimentações)</option>
+                <option value="Historico">Histórico de Cobranças (Logs de Envio)</option>
+                <option value="Exclusoes">Histórico de Exclusões</option>
               </select>
             </div>
           </div>

@@ -49,8 +49,10 @@ def login(request: LoginRequest):
             }
         else:
             raise HTTPException(status_code=401, detail="Usuário ou senha incorretos.")
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Erro interno no servidor: {str(e)}")
 
 @router.post("/forgot-password")
 def forgot_password(request: ForgotPasswordRequest):

@@ -7,8 +7,8 @@ import pdfplumber  # Necessário para ler o PDF
 
 class MailScanner:
     def __init__(self, config):
-        self.user = config.get('mail_user')
-        self.password = config.get('mail_pass')
+        self.user = config.get('base_mail_user')
+        self.password = config.get('base_mail_pass')
         self.server = config.get('imap_server')
         
         self.base_temp = "temp_data"
@@ -161,7 +161,6 @@ class MailScanner:
             print(f"🔍 Procurando NF {nf_str}...") 
 
             for pasta in todas_pastas:
-                if arquivos_baixados: break 
                 if any(x in pasta.lower() for x in ['spam', 'trash', 'lixeira', 'drafts']): continue
 
                 if not self._selecionar_pasta_segura(mail, pasta): continue
@@ -178,7 +177,7 @@ class MailScanner:
                      typ, data = mail.search(None, f'(BODY "{nf_str}")')
                      if data[0]: ids.extend(data[0].split())
 
-                ids = sorted(list(set(ids)), reverse=True)[:3]
+                ids = sorted(list(set(ids)), reverse=True)[:5]
                 
                 for e_id in ids:
                     _, msg_data = mail.fetch(e_id, "(RFC822)")

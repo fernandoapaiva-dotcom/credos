@@ -3,7 +3,7 @@ from datetime import datetime
 from src.database import listar_todos_agendamentos_ativos
 from src.manager import Manager
 
-def disparar_cobranca_automatica(forcar_execucao=False):
+def disparar_cobranca_automatica(forcar_execucao=False, cnpj_filtro=None):
     """
     Motor de Cobrança:
     1. Varre agendamentos ativos.
@@ -16,6 +16,14 @@ def disparar_cobranca_automatica(forcar_execucao=False):
     # 1. Busca configurações ativas
     agendamentos = listar_todos_agendamentos_ativos()
     
+    if cnpj_filtro:
+        agendamentos = [ag for ag in agendamentos if ag['empresa_dona_cnpj'] == cnpj_filtro]
+        if not agendamentos:
+            # Se não tem agendamento ativo mas queremos forçar, criamos um mock do agendamento
+            # para que o loop abaixo funcione com o Manager
+            agendamentos = [{'empresa_dona_cnpj': cnpj_filtro}]
+            forcar_execucao = True
+
     if not agendamentos:
         print("zzz Nenhuma automação ativa no banco de dados.")
         return 0

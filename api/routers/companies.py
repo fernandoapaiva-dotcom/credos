@@ -28,6 +28,15 @@ def add_company(company: CompanyCreate):
     else:
         raise HTTPException(status_code=400, detail=msg)
 
+@router.put("/{cnpj}")
+def update_company(cnpj: str, company: CompanyCreate):
+    from src.database import atualizar_unidade_central
+    sucesso, msg = atualizar_unidade_central(cnpj, company.nome, company.cnpj)
+    if sucesso:
+        return {"message": msg, "success": True}
+    else:
+        raise HTTPException(status_code=400, detail=msg)
+
 @router.delete("/{cnpj}")
 def delete_company(cnpj: str):
     sucesso, msg = excluir_unidade_central(cnpj)

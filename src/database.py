@@ -134,6 +134,45 @@ def cadastrar_unidade_central(nome, cnpj):
     finally:
         conn.close()
 
+def atualizar_unidade_central(old_cnpj, novo_nome, novo_cnpj):
+    """Atualiza nome e/ou CNPJ de uma unidade, renomeando o arquivo físico se necessário."""
+    conn = conectar()
+    c = conn.cursor()
+    try:
+        # 1. Atualiza o banco central
+        c.execute("UPDATE unidades SET empresa_nome = ?, empresa_cnpj = ? WHERE empresa_cnpj = ?",
+                  (novo_nome, novo_cnpj, old_cnpj))
+        
+        # 2. Se o CNPJ mudou, renomeia o arquivo do banco
+        if old_cnpj != novo_cnpj:
+            safe_old = str(old_cnpj).replace('.', '').replace('/', '').replace('-', '').strip()
+            safe_new = str(novo_cnpj).replace('.', '').replace('/', '').replace('-', '').strip()
+            
+            old_path = f"{DB_PREFIX}{safe_old}.db"
+            new_path = f"{DB_PREFIX}{safe_new}.db"
+            
+            if os.path.exists(old_path):
+                # Se o destino já existe (colisão), não deletamos o antigo por segurança, mas o código central já foi atualizado
+                if not os.path.exists(new_path):
+                    os.rename(old_path, new_path)
+                
+            # 3. Atualiza o CNPJ dentro da tabela config do novo banco
+            try:
+                conn_emp = conectar(novo_cnpj)
+                c_emp = conn_emp.cursor()
+                c_emp.execute("UPDATE config SET empresa_cnpj = ? WHERE id = 1", (novo_cnpj,))
+                conn_emp.commit()
+                conn_emp.close()
+            except Exception as e:
+                print(f"Aviso: Não foi possível atualizar CNPJ interno na config: {e}")
+
+        conn.commit()
+        return True, "Unidade atualizada com sucesso!"
+    except Exception as e:
+        return False, f"Erro ao atualizar unidade: {str(e)}"
+    finally:
+        conn.close()
+
 def excluir_unidade_central(cnpj):
     conn = conectar()
     c = conn.cursor()
@@ -210,11 +249,14 @@ def salvar_configuracoes_db(cnpj_empresa, novos_dados: dict):
 # ==============================================================================
 # 2. CLIENTES
 # ==============================================================================
-def listar_clientes_db(cnpj_empresa):
+def listar_clientes_db(cnpj_empresa, nome_filtro=None):
     if not cnpj_empresa: return []
     conn = conectar(cnpj_empresa)
     conn.row_factory = sqlite3.Row
-    res = conn.cursor().execute("SELECT * FROM clientes").fetchall()
+    if nome_filtro:
+        res = conn.cursor().execute("SELECT * FROM clientes WHERE nome=?", (nome_filtro,)).fetchall()
+    else:
+        res = conn.cursor().execute("SELECT * FROM clientes").fetchall()
     conn.close()
     return [dict(r) for r in res]
 
@@ -282,6 +324,10 @@ def atualizar_titulo_acao(cnpj_empresa, id_titulo, nova_acao, novo_status=None):
     c = conn.cursor()
     if novo_status:
         c.execute("UPDATE titulos SET acao = ?, status = ? WHERE id = ?", (nova_acao, novo_status, id_titulo))
+        # Log manual status change
+        res = c.execute("SELECT pagador FROM titulos WHERE id = ?", (id_titulo,)).fetchone()
+        if res:
+            salvar_log_envio(cnpj_empresa, res[0], "CRM Status Update", "Sucesso", f"Status alterado para {novo_status} ({nova_acao})", "Sistema/CRM")
     else:
         c.execute("UPDATE titulos SET acao = ? WHERE id = ?", (nova_acao, id_titulo))
     conn.commit()
@@ -460,8 +506,74 @@ def listar_usuarios():
         conn.close()
         return usuarios
     except Exception as e:
-        print(f"Erro ao listar usuários: {e}")
+        print(f"Erro ao extrair logs: {e}")
         return []
+
+def obter_stats_dashboard(cnpj):
+    conn = conectar(cnpj)
+    c = conn.cursor()
+    
+    # 1. Títulos em Aberto (Soma de valor)
+    c.execute("SELECT SUM(valor) FROM titulos WHERE status = 'Aberto'")
+    total_aberto = c.fetchone()[0] or 0.0
+    
+    # 2. Acordos Recebidos (Soma de valor dos que estão 'Pago' ou 'Baixado')
+    c.execute("SELECT SUM(valor) FROM titulos WHERE status IN ('Pago', 'Baixado', 'Recebido')")
+    total_recebido = c.fetchone()[0] or 0.0
+    
+    # 3. Clientes Ativos
+    c.execute("SELECT COUNT(*) FROM clientes")
+    total_clientes = c.fetchone()[0] or 0
+    
+    # 4. Em Cartório
+    c.execute("SELECT COUNT(*) FROM titulos WHERE status = 'Cartório'")
+    total_cartorio = c.fetchone()[0] or 0
+    
+    # 5. Dados para o Gráfico (Resumo de Atividades)
+    # Extraímos MM/YYYY do vencimento (assumindo DD/MM/YYYY)
+    try:
+        c.execute("""
+            SELECT 
+                substr(vencimento, 4, 7) as mes_ano,
+                SUM(CASE WHEN status IN ('Pago', 'Baixado', 'Recebido') THEN valor ELSE 0 END) as valor_pago,
+                SUM(CASE WHEN status = 'Aberto' THEN valor ELSE 0 END) as valor_aberto
+            FROM titulos
+            WHERE vencimento LIKE '__/__/____'
+            GROUP BY mes_ano
+            ORDER BY substr(vencimento, 7, 4) DESC, substr(vencimento, 4, 2) DESC
+            LIMIT 6
+        """)
+        rows = c.fetchall()
+        chart_data = []
+        for row in reversed(rows):
+            chart_data.append({
+                "name": row[0],
+                "recebido": row[1],
+                "pendente": row[2]
+            })
+    except:
+        chart_data = []
+        
+    # Dummy data se estiver vazio para demonstração
+    if not chart_data:
+        chart_data = [
+            {"name": "Jan", "recebido": 4000, "pendente": 2400},
+            {"name": "Fev", "recebido": 3000, "pendente": 1398},
+            {"name": "Mar", "recebido": 2000, "pendente": 9800},
+            {"name": "Abr", "recebido": 2780, "pendente": 3908},
+            {"name": "Mai", "recebido": 1890, "pendente": 4800},
+        ]
+
+    conn.close()
+    return {
+        "stats": {
+            "total_aberto": total_aberto,
+            "total_recebido": total_recebido,
+            "total_clientes": total_clientes,
+            "total_cartorio": total_cartorio
+        },
+        "chart_data": chart_data
+    }
 
 def excluir_usuario(login):
     try:

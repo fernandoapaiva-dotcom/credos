@@ -42,6 +42,25 @@ def save_client(client: ClientModel, x_company_cnpj: str = Header(...)):
     salvar_cliente_db(cnpj, client.nome, client.cnpj, client.whatsapp, client.email, client.contato)
     return {"success": True, "message": "Cliente salvo com sucesso."}
 
+@router.put("/clients/{id}")
+def update_client(id: int, client: ClientModel, x_company_cnpj: str = Header(...)):
+    cnpj = get_cnpj(x_company_cnpj)
+    from src.database import conectar
+    conn = conectar(cnpj)
+    c = conn.cursor()
+    try:
+        c.execute("""
+            UPDATE clientes 
+            SET nome=?, cnpj=?, whatsapp=?, email=?, contato=?
+            WHERE id=?
+        """, (client.nome, client.cnpj, client.whatsapp, client.email, client.contato, id))
+        conn.commit()
+        return {"success": True, "message": "Cliente atualizado."}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        conn.close()
+
 @router.delete("/clients/{id}")
 def delete_client(id: int, nome: str, x_company_cnpj: str = Header(...)):
     cnpj = get_cnpj(x_company_cnpj)
@@ -91,3 +110,35 @@ def update_title_status(id_titulo: int, update: TitleStatusUpdate, x_company_cnp
         
     atualizar_titulo_status_acao(cnpj, id_titulo, novo_status, nova_acao)
     return {"success": True, "message": f"Título atualizado para {novo_status} - {nova_acao}"}
+
+@router.get("/dashboard-stats")
+def get_dashboard_stats(x_company_cnpj: str = Header(...)):
+    cnpj = get_cnpj(x_company_cnpj)
+    from src.database import obter_stats_dashboard
+    return obter_stats_dashboard(cnpj)
+
+@router.post("/charge-all")
+def charge_all_company(x_company_cnpj: str = Header(...)):
+    cnpj = get_cnpj(x_company_cnpj)
+    from src.worker import disparar_cobranca_automatica
+    total = disparar_cobranca_automatica(forcar_execucao=True, cnpj_filtro=cnpj)
+    return {"success": True, "total_envios": total}
+
+@router.post("/preview-charge-all")
+def preview_charge_all(x_company_cnpj: str = Header(...)):
+    from src.manager import Manager
+    mgr = Manager(get_cnpj(x_company_cnpj))
+    resumo = mgr.prever_cobranca_coletiva()
+    return {"success": True, "preview": resumo}
+
+@router.post("/clients/{nome}/charge")
+def charge_client(nome: str, x_company_cnpj: str = Header(...)):
+    from src.manager import Manager
+    mgr = Manager(get_cnpj(x_company_cnpj))
+    return mgr.cobrar_cliente_especifico(nome)
+
+@router.post("/titles/{id}/charge")
+def charge_title(id: int, x_company_cnpj: str = Header(...)):
+    from src.manager import Manager
+    mgr = Manager(get_cnpj(x_company_cnpj))
+    return mgr.cobrar_titulo_unico(id)

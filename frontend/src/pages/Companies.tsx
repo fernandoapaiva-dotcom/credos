@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useAuth, api } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import { Building2, Plus, LogOut, Loader2, ArrowRight } from 'lucide-react';
+import { Building2, Plus, LogOut, Loader2, ArrowRight, Edit2, Trash2, X } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 
 interface Company {
@@ -25,6 +25,15 @@ export const Companies: React.FC = () => {
   const [cnpj, setCnpj] = useState('');
   const [addingLoading, setAddingLoading] = useState(false);
   const [error, setError] = useState('');
+
+  // Edit State
+  const [isEditing, setIsEditing] = useState(false);
+  const [editingCompany, setEditingCompany] = useState<Company | null>(null);
+  const [editNome, setEditNome] = useState('');
+  const [editCnpj, setEditCnpj] = useState('');
+  const [editEmail, setEditEmail] = useState('');
+  const [editWaInstance, setEditWaInstance] = useState('');
+  const [configLoading, setConfigLoading] = useState(false);
 
   const fetchCompanies = async () => {
     try {
@@ -66,6 +75,70 @@ export const Companies: React.FC = () => {
     }
   };
 
+  const handleEditInit = async (e: React.MouseEvent, company: Company) => {
+    e.stopPropagation();
+    setEditingCompany(company);
+    setEditNome(company.empresa_nome);
+    setEditCnpj(company.empresa_cnpj);
+    setIsEditing(true);
+    setError('');
+
+    // Busca as configs para preencher os campos de email/wa
+    try {
+      setConfigLoading(true);
+      const res = await api.get(`/companies/${company.empresa_cnpj}/config`);
+      setEditEmail(res.data.fin_mail_user || '');
+      setEditWaInstance(res.data.instance_name || company.empresa_cnpj);
+    } catch (err) {
+      console.error("Erro ao buscar configs da empresa", err);
+    } finally {
+      setConfigLoading(false);
+    }
+  };
+
+  const handleUpdate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingCompany || !editNome || !editCnpj) return;
+    setAddingLoading(true);
+    setError('');
+    
+    try {
+      // 1. Atualiza dados centrais (Nome/CNPJ)
+      await api.put(`/companies/${editingCompany.empresa_cnpj}`, { 
+        nome: editNome, 
+        cnpj: editCnpj 
+      });
+
+      // 2. Atualiza configs específicas (Email/WhatsApp)
+      // Usamos o novo CNPJ se ele mudou, ou o antigo
+      const targetCnpj = editCnpj;
+      await api.patch(`/companies/${targetCnpj}/config`, {
+        fin_mail_user: editEmail,
+        // O campo no banco é 'empresa_cnpj' mas às vezes o user quer um alias
+      });
+
+      setIsEditing(false);
+      fetchCompanies();
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Erro ao atualizar empresa');
+    } finally {
+      setAddingLoading(false);
+    }
+  };
+
+  const handleDelete = async (e: React.MouseEvent, cnpj: string) => {
+    e.stopPropagation();
+    if (!window.confirm('Tem certeza que deseja excluir esta empresa e todos os seus dados? Esta ação é irreversível.')) return;
+    
+    try {
+      await api.delete(`/companies/${cnpj}`);
+      fetchCompanies();
+    } catch (err) {
+      console.error(err);
+      alert('Erro ao excluir empresa');
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-dark-bg flex flex-col items-center py-12 px-4 transition-colors">
       
@@ -104,8 +177,26 @@ export const Companies: React.FC = () => {
               <div 
                 key={c.id} 
                 onClick={() => handleSelect(c.empresa_cnpj)}
-                className="card flex flex-col items-center justify-center p-8 cursor-pointer hover:-translate-y-1 hover:shadow-lg transition-all border-b-4 border-b-transparent hover:border-b-primary-500 group"
+                className="card relative flex flex-col items-center justify-center p-8 cursor-pointer hover:-translate-y-1 hover:shadow-lg transition-all border-b-4 border-b-transparent hover:border-b-primary-500 group"
               >
+                {/* AÇÕES */}
+                <div className="absolute top-3 right-3 flex gap-1 z-10">
+                  <button 
+                    onClick={(e) => handleEditInit(e, c)}
+                    className="p-2 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:text-primary-600 dark:hover:text-primary-400 shadow-sm border border-slate-200 dark:border-slate-700 transition-colors"
+                    title="Editar"
+                  >
+                    <Edit2 size={16} />
+                  </button>
+                  <button 
+                    onClick={(e) => handleDelete(e, c.empresa_cnpj)}
+                    className="p-2 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:text-red-600 shadow-sm border border-slate-200 dark:border-slate-700 transition-colors"
+                    title="Excluir"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+
                 {c.logo_b64 ? (
                   <img src={`data:image/png;base64,${c.logo_b64}`} className="w-16 h-16 rounded-full object-cover mb-4 shadow-sm" alt="Logo" />
                 ) : (
@@ -160,6 +251,83 @@ export const Companies: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* MODAL EDITAR */}
+      {isEditing && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="card w-full max-w-md p-6 shadow-2xl animate-fade-in">
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-xl font-bold dark:text-white">Editar Empresa</h3>
+              <button onClick={() => setIsEditing(false)} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg">
+                <X size={20} />
+              </button>
+            </div>
+
+            {error && <div className="p-3 bg-red-50 text-red-600 rounded-lg text-sm mb-4">{error}</div>}
+
+            <form onSubmit={handleUpdate} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1 px-1">Razão Social</label>
+                <input 
+                  type="text" 
+                  required 
+                  value={editNome} 
+                  onChange={e=>setEditNome(e.target.value)} 
+                  className="input-field"
+                  placeholder="Ex: Empresa de Exemplo LTDA"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1 px-1">CNPJ (Apenas números)</label>
+                <input 
+                  type="text" 
+                  required 
+                  value={editCnpj} 
+                  onChange={e=>setEditCnpj(e.target.value)} 
+                  className="input-field"
+                  placeholder="Ex: 00000000000191"
+                />
+                <p className="text-[10px] text-amber-600 dark:text-amber-500 mt-1 px-1">⚠️ Alterar o CNPJ moverá todos os dados do banco antigo para o novo.</p>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1 px-1">E-mail de Envio</label>
+                  <input 
+                    type="email" 
+                    value={editEmail} 
+                    onChange={e=>setEditEmail(e.target.value)} 
+                    className="input-field"
+                    placeholder="financeiro@empresa.com"
+                    disabled={configLoading}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1 px-1">Instância WhatsApp</label>
+                  <input 
+                    type="text" 
+                    value={editWaInstance} 
+                    className="input-field bg-slate-50 dark:bg-slate-800 opacity-60 cursor-not-allowed"
+                    placeholder="Mesmo que o CNPJ"
+                    disabled={true}
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1 px-1">Automático (vinculado ao CNPJ)</p>
+                </div>
+              </div>
+
+              <div className="flex gap-3 pt-4">
+                <button type="button" onClick={() => setIsEditing(false)} className="btn-secondary flex-1 py-2.5">
+                  Cancelar
+                </button>
+                <button type="submit" disabled={addingLoading} className="btn-primary flex-1 py-2.5">
+                  {addingLoading ? <Loader2 className="animate-spin" size={18} /> : 'Salvar Alterações'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
     </div>
   );
