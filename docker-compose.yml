@@ -1,0 +1,24 @@
+services:
+  backend:
+    build: .
+    container_name: credos-backend
+    ports:
+      - "8001:8001"
+    volumes:
+      - .:/app
+      - db-data:/app/data
+    environment:
+      - DATABASE_DIR=/app/data
+    restart: always
+
+  frontend:
+    build: ./frontend
+    container_name: credos-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: always
+
+volumes:
+  db-data:

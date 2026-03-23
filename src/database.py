@@ -13,15 +13,20 @@ def _get_default_logo():
         except: return ""
     return ""
 
+# Configuração de diretório (suporte para Docker)
+DATABASE_DIR = os.getenv("DATABASE_DIR", ".")
+if not os.path.exists(DATABASE_DIR):
+    os.makedirs(DATABASE_DIR, exist_ok=True)
+
 # Nomes dos bancos
-CENTRAL_DB_NAME = "credos_central.db"
+CENTRAL_DB_NAME = os.path.join(DATABASE_DIR, "credos_central.db")
 DB_PREFIX = "db_"
 
 def conectar(cnpj=None):
     if cnpj:
         # Limpa o CNPJ para usar como nome de arquivo
         safe_cnpj = str(cnpj).replace('.', '').replace('/', '').replace('-', '').strip()
-        db_path = f"{DB_PREFIX}{safe_cnpj}.db"
+        db_path = os.path.join(DATABASE_DIR, f"{DB_PREFIX}{safe_cnpj}.db")
         conn = sqlite3.connect(db_path)
         # Verifica se as tabelas fundamentais existem
         c = conn.cursor()
