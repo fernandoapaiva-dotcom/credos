@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import { Shield, Mail, Lock, KeyRound, ArrowLeft } from 'lucide-react';
+import { Mail, Lock, KeyRound, ArrowLeft } from 'lucide-react';
 import axios from 'axios';
 
 export const Login: React.FC = () => {
@@ -56,10 +56,10 @@ export const Login: React.FC = () => {
 
       <div className="glass-panel w-full max-w-md p-8 rounded-2xl relative z-10 animate-fade-in">
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-primary-100 text-primary-600 mb-4 dark:bg-primary-900/50">
-            <Shield size={32} />
+          <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-white shadow-sm mb-4 dark:bg-slate-800">
+            <img src="/logo.png" className="w-12 h-12 object-contain" alt="Credos" />
           </div>
-          <h1 className="text-2xl font-bold text-slate-900 dark:text-white mb-2">Credos SaaS</h1>
+          <h1 className="text-2xl font-black text-slate-900 dark:text-white mb-2">Credos</h1>
           <p className="text-slate-500 dark:text-slate-400">
             {isForgot ? 'Recuperação de conta' : 'Acesse sua conta para continuar'}
           </p>

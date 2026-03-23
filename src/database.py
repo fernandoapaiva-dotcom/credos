@@ -2,6 +2,16 @@ import sqlite3
 import json
 import os
 from datetime import datetime
+import base64
+
+def _get_default_logo():
+    path = os.path.join(os.path.dirname(__file__), "..", "frontend", "public", "logo.png")
+    if os.path.exists(path):
+        try:
+            with open(path, "rb") as f:
+                return f"data:image/png;base64,{base64.b64encode(f.read()).decode('utf-8')}"
+        except: return ""
+    return ""
 
 # Nomes dos bancos
 CENTRAL_DB_NAME = "credos_central.db"
@@ -38,6 +48,12 @@ def _verificar_migracoes_config(conn):
         c.execute("ALTER TABLE config ADD COLUMN juros_mensal REAL DEFAULT 1.0")
     if 'dias_para_cartorio' not in cols:
         c.execute("ALTER TABLE config ADD COLUMN dias_para_cartorio INTEGER DEFAULT 10")
+    if 'logo_b64' in cols:
+        # Garante que se estiver vazio, a gente coloca a logo nova (Credos)
+        c.execute("SELECT logo_b64 FROM config LIMIT 1")
+        row = c.fetchone()
+        if not row or not row[0]:
+            c.execute("UPDATE config SET logo_b64 = ?", (_get_default_logo(),))
     conn.commit()
 
 def _criar_tabelas_empresa(conn):
@@ -233,7 +249,7 @@ def salvar_configuracoes_db(cnpj_empresa, novos_dados: dict):
 
         c.execute("SELECT count(*) FROM config")
         if c.fetchone()[0] == 0:
-            c.execute("INSERT INTO config (empresa_cnpj) VALUES (?)", (cnpj_empresa,))
+            c.execute("INSERT INTO config (empresa_cnpj, logo_b64) VALUES (?, ?)", (cnpj_empresa, _get_default_logo()))
 
         set_clause = ", ".join([f"{key} = ?" for key in dados_validos.keys()])
         valores = list(dados_validos.values())
@@ -254,7 +270,7 @@ def listar_clientes_db(cnpj_empresa, nome_filtro=None):
     conn = conectar(cnpj_empresa)
     conn.row_factory = sqlite3.Row
     if nome_filtro:
-        res = conn.cursor().execute("SELECT * FROM clientes WHERE nome=?", (nome_filtro,)).fetchall()
+        res = conn.cursor().execute("SELECT * FROM clientes WHERE trim(nome)=?", (nome_filtro.strip(),)).fetchall()
     else:
         res = conn.cursor().execute("SELECT * FROM clientes").fetchall()
     conn.close()
@@ -263,7 +279,7 @@ def listar_clientes_db(cnpj_empresa, nome_filtro=None):
 def verificar_cliente_existe(cnpj_empresa, nome_cliente):
     if not cnpj_empresa: return False
     conn = conectar(cnpj_empresa)
-    res = conn.cursor().execute("SELECT id FROM clientes WHERE nome=?", (nome_cliente,)).fetchone()
+    res = conn.cursor().execute("SELECT id FROM clientes WHERE trim(nome)=?", (nome_cliente.strip(),)).fetchone()
     conn.close()
     return res is not None
 
@@ -271,6 +287,7 @@ def salvar_cliente_db(cnpj_empresa, nome, cnpj, whatsapp, email, contato=None):
     if not cnpj_empresa: return
     conn = conectar(cnpj_empresa)
     c = conn.cursor()
+    nome = nome.strip() if nome else ""
     if not verificar_cliente_existe(cnpj_empresa, nome):
         c.execute("INSERT INTO clientes (nome, cnpj, whatsapp, email, contato) VALUES (?,?,?,?,?)",
                   (nome, cnpj, whatsapp, email, contato if contato else ""))
@@ -299,14 +316,17 @@ def salvar_dados_no_banco(cnpj_empresa, titulos):
     conn = conectar(cnpj_empresa)
     c = conn.cursor()
     for t in titulos:
+        pagador = t['pagador'].strip() if t.get('pagador') else ""
+        num_nf = str(t['numero']).strip() if t.get('numero') else ""
+        
         exists = c.execute(
-            "SELECT id FROM titulos WHERE numero_nf=? AND pagador=? AND vencimento=?", 
-            (t['numero'], t['pagador'], t['vencimento'])
+            "SELECT id FROM titulos WHERE numero_nf=? AND trim(pagador)=? AND vencimento=?", 
+            (num_nf, pagador, t['vencimento'])
         ).fetchone()
         
         if not exists:
             c.execute("INSERT INTO titulos (pagador, numero_nf, vencimento, valor) VALUES (?,?,?,?)", 
-                      (t['pagador'], t['numero'], t['vencimento'], t['valor']))
+                      (pagador, num_nf, t['vencimento'], t['valor']))
     conn.commit()
     conn.close()
 
@@ -314,24 +334,42 @@ def listar_titulos_por_cliente(cnpj_empresa, nome_cliente):
     if not cnpj_empresa: return []
     conn = conectar(cnpj_empresa)
     conn.row_factory = sqlite3.Row
-    res = conn.cursor().execute("SELECT * FROM titulos WHERE pagador=?", (nome_cliente,)).fetchall()
+    # Usamos trim para evitar problemas com caracteres invisíveis vindos de PDFs
+    res = conn.cursor().execute("SELECT * FROM titulos WHERE trim(pagador)=?", (nome_cliente.strip(),)).fetchall()
     conn.close()
     return [dict(r) for r in res]
 
 def atualizar_titulo_acao(cnpj_empresa, id_titulo, nova_acao, novo_status=None):
     if not cnpj_empresa: return
     conn = conectar(cnpj_empresa)
+    conn.row_factory = sqlite3.Row
     c = conn.cursor()
+    
+    # Busca estado anterior para auditoria e nome do pagador para log
+    old = c.execute("SELECT status, acao, pagador FROM titulos WHERE id = ?", (id_titulo,)).fetchone()
+    if not old:
+        conn.close()
+        return
+        
+    status_anterior = old['status']
+    acao_anterior = old['acao']
+    pagador = old['pagador']
+    
     if novo_status:
         c.execute("UPDATE titulos SET acao = ?, status = ? WHERE id = ?", (nova_acao, novo_status, id_titulo))
-        # Log manual status change
-        res = c.execute("SELECT pagador FROM titulos WHERE id = ?", (id_titulo,)).fetchone()
-        if res:
-            salvar_log_envio(cnpj_empresa, res[0], "CRM Status Update", "Sucesso", f"Status alterado para {novo_status} ({nova_acao})", "Sistema/CRM")
     else:
         c.execute("UPDATE titulos SET acao = ? WHERE id = ?", (nova_acao, id_titulo))
+        novo_status = status_anterior
+        
     conn.commit()
     conn.close()
+    
+    # Registra auditoria
+    registrar_auditoria_titulo(cnpj_empresa, id_titulo, "Sistema/UI", status_anterior, novo_status, nova_acao)
+    
+    # Log de envio (legado para histórico rápido)
+    if pagador:
+        salvar_log_envio(cnpj_empresa, pagador, "CRM Status Update", "Sucesso", f"Status alterado para {novo_status} ({nova_acao})", "Sistema/CRM")
 
 def atualizar_titulo_status_acao(cnpj_empresa, id_titulo, novo_status, nova_acao):
     return atualizar_titulo_acao(cnpj_empresa, id_titulo, nova_acao, novo_status)
@@ -529,7 +567,11 @@ def obter_stats_dashboard(cnpj):
     c.execute("SELECT COUNT(*) FROM titulos WHERE status = 'Cartório'")
     total_cartorio = c.fetchone()[0] or 0
     
-    # 5. Dados para o Gráfico (Resumo de Atividades)
+    # 5. Total de Mensagens Enviadas (Logs)
+    c.execute("SELECT COUNT(*) FROM logs_envio")
+    total_logs = c.fetchone()[0] or 0
+
+    # 6. Dados para o Gráfico (Resumo de Atividades)
     # Extraímos MM/YYYY do vencimento (assumindo DD/MM/YYYY)
     try:
         c.execute("""
@@ -540,12 +582,12 @@ def obter_stats_dashboard(cnpj):
             FROM titulos
             WHERE vencimento LIKE '__/__/____'
             GROUP BY mes_ano
-            ORDER BY substr(vencimento, 7, 4) DESC, substr(vencimento, 4, 2) DESC
-            LIMIT 6
+            ORDER BY substr(vencimento, 7, 4) ASC, substr(vencimento, 4, 2) ASC
+            LIMIT 12
         """)
         rows = c.fetchall()
         chart_data = []
-        for row in reversed(rows):
+        for row in rows:
             chart_data.append({
                 "name": row[0],
                 "recebido": row[1],
@@ -554,14 +596,10 @@ def obter_stats_dashboard(cnpj):
     except:
         chart_data = []
         
-    # Dummy data se estiver vazio para demonstração
+    # Data placeholder if empty
     if not chart_data:
         chart_data = [
-            {"name": "Jan", "recebido": 4000, "pendente": 2400},
-            {"name": "Fev", "recebido": 3000, "pendente": 1398},
-            {"name": "Mar", "recebido": 2000, "pendente": 9800},
-            {"name": "Abr", "recebido": 2780, "pendente": 3908},
-            {"name": "Mai", "recebido": 1890, "pendente": 4800},
+            {"name": "Sem Dados", "recebido": 0, "pendente": 0}
         ]
 
     conn.close()
@@ -570,7 +608,8 @@ def obter_stats_dashboard(cnpj):
             "total_aberto": total_aberto,
             "total_recebido": total_recebido,
             "total_clientes": total_clientes,
-            "total_cartorio": total_cartorio
+            "total_cartorio": total_cartorio,
+            "total_logs": total_logs
         },
         "chart_data": chart_data
     }

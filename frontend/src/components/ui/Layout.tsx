@@ -34,8 +34,8 @@ export const Layout: React.FC<LayoutProps> = ({ children, title }) => {
       
       {/* SIDEBAR */}
       <aside className="w-64 bg-white dark:bg-dark-surface border-r border-slate-200 dark:border-dark-border flex flex-col transition-colors z-20 shadow-sm relative">
-        <div className="h-16 flex items-center px-6 border-b border-slate-100 dark:border-dark-border/50 font-bold text-xl text-primary-600 dark:text-primary-400 gap-2">
-          <Shield size={24} /> Credos
+        <div className="h-16 flex items-center px-6 border-b border-slate-100 dark:border-dark-border/50 font-bold text-xl text-primary-600 dark:text-primary-400 gap-3">
+          <img src="/logo.png" className="w-8 h-8 object-contain" alt="Credos" /> Credos
         </div>
         
         <nav className="flex-1 py-6 px-4 space-y-1">
@@ -100,5 +100,3 @@ export const Layout: React.FC<LayoutProps> = ({ children, title }) => {
   );
 };
 
-// Fix for Shield missing import
-import { Shield } from 'lucide-react';

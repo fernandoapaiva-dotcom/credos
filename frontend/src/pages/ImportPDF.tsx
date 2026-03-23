@@ -349,6 +349,7 @@ export const ImportPDF: React.FC = () => {
                         }}
                       >
                         <option value="Pago">Marcar como Pago</option>
+                        <option value="Negociado">Em Negociação (Pausar Cobrança)</option>
                         <option value="Cartório">Encaminhado p/ Cartório</option>
                         <option value="Cancelado">Foi Cancelado pelo Emissor</option>
                       </select>

@@ -61,7 +61,7 @@ class Manager:
             titulos = listar_titulos_por_cliente(self.cnpj_empresa, cli['nome'])
             pendentes = []
             for t in titulos:
-                if t['acao'] == 'Cobrar' and t['status'] in ('Aberto', 'Manter Aberto'):
+                if t['acao'] == 'Cobrar' and t['status'] in ('Aberto', 'Manter Aberto', 'Cartório'):
                     calc = self.calcular_valores_cdc(t['valor'], t['vencimento'])
                     t_copy = dict(t)
                     t_copy.update(calc)
@@ -126,34 +126,52 @@ class Manager:
         contato = dados_cliente.get('contato') or dados_cliente.get('nome') or nome_cliente
         prazo_cartorio_config = self.config.get('dias_para_cartorio') if self.config.get('dias_para_cartorio') is not None else 10
         
+        has_cartorio = any(it.get('status') == 'Cartório' for it in itens)
         dias_max_atraso = max([it.get('dias_atraso', 0) for it in itens]) if itens else 0
         restante_cartorio = prazo_cartorio_config - dias_max_atraso
         
         msg = f"{saudacao}, {contato}.\n\n"
-        msg += f"Identificamos pendências financeiras em aberto em nome de *{nome_cliente}*.\n\n"
         
-        if restante_cartorio > 5:
-            msg += f"🗓️ *Aviso:* Faltam {restante_cartorio} dias para o início do processo de negativação/cartório.\n"
-        elif 1 < restante_cartorio <= 5:
-            msg += f"⚠️ *ALERTA URGENTE:* Faltam apenas *{restante_cartorio} dias* para o envio automático deste débito ao *CARTÓRIO*.\n"
-        elif restante_cartorio == 1:
-            msg += f"🚨 *NOTIFICAÇÃO FINAL:* Seu título será instruído para *CARTÓRIO AMANHÃ*.\n"
-        elif restante_cartorio == 0:
-            msg += f"❗ *PRAZO ESGOTADO:* O título atingiu o prazo limite e o processo de *CARTÓRIO* será iniciado HOJE.\n"
+        if has_cartorio:
+            msg += f"❗ *NOTIFICAÇÃO DE TÍTULO EM CARTÓRIO*\n\n"
+            msg += f"Informamos que os débitos abaixo em nome de *{nome_cliente}* já se encontram em processo de **PROTESTO/CARTÓRIO** devido ao tempo de atraso.\n\n"
         else:
-            msg += f"❗ *EM PROCESSO DE CARTÓRIO:* Este débito já ultrapassou o prazo limite de {prazo_cartorio_config} dias.\n"
+            msg += f"Identificamos pendências financeiras em aberto em nome de *{nome_cliente}*.\n\n"
+        
+        # Avisos de prazo (apenas se não estiver em cartório ou se houver outros a vencer)
+        if not has_cartorio:
+            if restante_cartorio > 5:
+                msg += f"🗓️ *Aviso:* Faltam {restante_cartorio} dias para o início do processo de negativação/cartório.\n"
+            elif 1 < restante_cartorio <= 5:
+                msg += f"⚠️ *ALERTA URGENTE:* Faltam apenas *{restante_cartorio} dias* para o envio automático deste débito ao *CARTÓRIO*.\n"
+            elif restante_cartorio == 1:
+                msg += f"🚨 *NOTIFICAÇÃO FINAL:* Seu título será instruído para *CARTÓRIO AMANHÃ*.\n"
+            elif restante_cartorio == 0:
+                msg += f"❗ *PRAZO ESGOTADO:* O título atingiu o prazo limite e o processo de *CARTÓRIO* será iniciado HOJE.\n"
+        
+        if has_cartorio:
+            msg += f"⚠️ *Atenção:* Títulos em cartório geram restrições imediatas ao crédito e custos adicionais operacionais.\n"
 
         msg += f"\n📋 *Detalhamento dos Títulos:*\n"
         
         for item in itens:
-            msg += f"🧾 *NF {item['numero_nf']}* | Venc: {item['vencimento']}\n"
+            msg += f"🧾 *NF {item['numero_nf']}* | Venc: {item['vencimento']} ({item['dias_atraso']} dias de atraso)\n"
             msg += f"   • Principal: R$ {item['principal']:,.2f}\n"
             if item.get('multa', 0) > 0 or item.get('juros', 0) > 0:
                 msg += f"   • (+) Encargos: R$ {item['multa'] + item['juros']:,.2f}\n"
             msg += f"   • Subtotal: R$ {item['total']:,.2f}\n\n"
             
         msg += f"✅ *VALOR TOTAL ATUALIZADO:* R$ {total:,.2f}\n\n"
-        msg += f"Gentileza entrar em contato para regularização.\n\n"
+        
+        if has_cartorio:
+            msg += f"👉 *INSTRUÇÕES DE REGULARIZAÇÃO:*\n"
+            msg += f"1. O pagamento do valor acima deve ser feito à nossa empresa para quitação do débito.\n"
+            msg += f"2. As **taxas de cartório** deverão ser pagas por sua empresa **diretamente ao tabelionato**.\n"
+            msg += f"3. Após confirmarmos seu pagamento, emitiremos a **CARTA DE ANUÊNCIA** digital para que você possa baixar o protesto imediatamente.\n\n"
+            msg += f"Gentileza tratar este assunto com a máxima prioridade.\n\n"
+        else:
+            msg += f"Gentileza entrar em contato para regularização.\n\n"
+        
         return msg
 
     def buscar_e_zipar_pdfs(self, cliente_nome, itens):
@@ -195,6 +213,26 @@ class Manager:
         cli_dados = listar_clientes_db(self.cnpj_empresa, nome_filtro=cliente_nome)
         if not cli_dados: return {"whatsapp": False, "email": False}
         cli = cli_dados[0]
+        
+        # FAIL-SAFE: Re-verifica no BANCO se os títulos ainda estão para 'Cobrar'
+        # Isso evita Race Conditions se o usuário baixar o título enquanto o robô está rodando
+        conn = conectar(self.cnpj_empresa)
+        c = conn.cursor()
+        itens_validados = []
+        for it in itens:
+            tid = it.get('id')
+            if not tid: continue
+            row = c.execute("SELECT status, acao FROM titulos WHERE id=?", (tid,)).fetchone()
+            if row and row[1] == 'Cobrar' and row[0] in ('Aberto', 'Manter Aberto', 'Cartório'):
+                itens_validados.append(it)
+        conn.close()
+
+        if not itens_validados:
+            print(f"⚠️ [FAIL-SAFE] Abortando envio para {cliente_nome}: Todos os títulos foram baixados ou pausados recentemente.")
+            return {"whatsapp": False, "email": False, "skipped": True}
+        
+        # Se alguns foram baixados mas outros não, atualizamos o conteúdo para não cobrar o que já foi pago
+        itens = itens_validados
         
         # 1. Enviar WhatsApp via Evolution
         whatsapp_raw = cli.get('whatsapp')
@@ -314,8 +352,9 @@ class Manager:
         """
         conn = conectar(self.cnpj_empresa)
         cursor = conn.cursor()
-        # Seleciona títulos em aberto (mesmo que estejam pausados)
-        cursor.execute("SELECT * FROM titulos WHERE status='Aberto'")
+        # Seleciona títulos elegíveis para cobrança (mesmo que pausados individualmente, o motor pode vê-los)
+        # Sincronizado com agrupar_debitos_por_cliente
+        cursor.execute("SELECT * FROM titulos WHERE status IN ('Aberto', 'Manter Aberto', 'Cartório')")
         rows = cursor.fetchall()
         conn.close()
 
@@ -346,14 +385,15 @@ class Manager:
             cli_dados = listar_clientes_db(self.cnpj_empresa, nome_filtro=pagador)
             cli = cli_dados[0] if cli_dados else {"whatsapp": "", "email": ""}
             
-            resumo.append({
-                "cliente": pagador,
-                "qtd_titulos": len([it for it in itens if it['acao'] == 'Cobrar']),
-                "valor_total": sum(it['total'] for it in itens if it['acao'] == 'Cobrar'),
-                "whatsapp": cli.get('whatsapp', ''),
-                "email": cli.get('email', ''),
-                "itens": sorted(itens, key=lambda x: x['vencimento'])
-            })
+            if any(it['acao'] == 'Cobrar' for it in itens):
+                resumo.append({
+                    "cliente": pagador,
+                    "qtd_titulos": len([it for it in itens if it['acao'] == 'Cobrar']),
+                    "valor_total": sum(it['total'] for it in itens if it['acao'] == 'Cobrar'),
+                    "whatsapp": cli.get('whatsapp', ''),
+                    "email": cli.get('email', ''),
+                    "itens": sorted(itens, key=lambda x: x['vencimento'])
+                })
 
         return sorted(resumo, key=lambda x: x['cliente'])
 
@@ -547,13 +587,20 @@ class Manager:
         pdf = FPDF(orientation='L', unit='mm', format='A4')
         pdf.add_page()
         
-        # Logo da Empresa (Canto Superior Esquerdo)
+        # Logo do Sistema (Credos) - Canto Superior Esquerdo
+        credos_logo = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'frontend', 'public', 'logo.png')
+        if os.path.exists(credos_logo):
+            try:
+                # Usando h=12 para altura máxima fixa, mantendo proporção e evitando sobreposição na tabela
+                pdf.image(credos_logo, 10, 10, h=12)
+            except Exception:
+                pass
+        
+        # Logo da Empresa cadastrada - Canto Superior Direito
         if logo_path and os.path.exists(logo_path):
             try:
-                # Se a logo for muito grande, o FPDF pode ter dificuldades. 
-                # Vamos tentar manter uma proporção fixa de largura (35mm)
-                # O FPDF calcula a altura automaticamente se passarmos 0.
-                pdf.image(logo_path, 12, 12, 35) # Aumentei um pouco a margem (12,12) e largura (35)
+                # Posição X calculada para a direita (250mm). O documento Paisagem tem 297mm.
+                pdf.image(logo_path, 250, 10, h=12)
             except Exception as e:
                 print(f"Erro ao inserir logo no PDF: {e}")
         

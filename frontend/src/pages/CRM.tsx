@@ -27,6 +27,7 @@ export const CRM: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
   const [titles, setTitles] = useState<Title[]>([]);
+  const [selectedTitleIds, setSelectedTitleIds] = useState<number[]>([]);
   
   const [loadingClients, setLoadingClients] = useState(false);
   const [loadingTitles, setLoadingTitles] = useState(false);
@@ -85,16 +86,41 @@ export const CRM: React.FC = () => {
 
   const handleSelectClient = (c: Client) => {
     setSelectedClient(c);
+    setSelectedTitleIds([]);
     fetchTitles(c.nome);
   };
 
   const updateTitleStatus = async (id: number, newStatus: string, action: string) => {
     setActionLoading(true);
     try {
-      await api.patch(`/crm/titles/${id}`, { status: newStatus, acao: action });
+      await api.patch(`/crm/titles/${id}`, { status: newStatus || 'Aberto', acao: action || 'Cobrar' });
       if (selectedClient) fetchTitles(selectedClient.nome);
-    } catch(e) {
+    } catch(e: any) {
+      console.error(e?.response?.data || e);
       alert("Erro ao atualizar status do título.");
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleBulkUpdateStatus = async (newStatus: string, action: string) => {
+    if (selectedTitleIds.length === 0) return;
+    const msg = newStatus === 'Pago' 
+      ? `Deseja realmente marcar ${selectedTitleIds.length} títulos como PAGOS? Esta ação é irreversível e interromperá as cobranças.`
+      : `Deseja mover ${selectedTitleIds.length} títulos para o status de ${newStatus}?`;
+
+    if (!window.confirm(msg)) return;
+    
+    setActionLoading(true);
+    try {
+      await Promise.all(
+        selectedTitleIds.map(id => api.patch(`/crm/titles/${id}`, { status: newStatus || 'Aberto', acao: action || 'Cobrar' }))
+      );
+      setSelectedTitleIds([]);
+      if (selectedClient) fetchTitles(selectedClient.nome);
+    } catch(e: any) {
+      console.error(e?.response?.data || e);
+      alert("Erro ao atualizar múltiplos títulos.");
     } finally {
       setActionLoading(false);
     }
@@ -211,7 +237,7 @@ export const CRM: React.FC = () => {
     switch(status) {
       case 'Aberto': return 'bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800';
       case 'Pago': return 'bg-green-100 text-green-800 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-blue-800';
-      case 'Negociado': return 'bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-900/30 dark:text-amber-400 dark:border-amber-800';
+      case 'Negociado': return 'bg-indigo-100 text-indigo-800 border-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-400 dark:border-indigo-800';
       case 'Cartório': return 'bg-red-100 text-red-800 border-red-200 dark:bg-red-900/30 dark:text-red-400 dark:border-red-800';
       default: return 'bg-slate-100 text-slate-800 border-slate-200 dark:bg-slate-800 py-1 dark:text-slate-300 dark:border-slate-700';
     }
@@ -288,9 +314,10 @@ export const CRM: React.FC = () => {
                     <span className="flex items-center gap-1.5"><strong className="font-semibold text-slate-900 dark:text-slate-300">CNPJ:</strong> {selectedClient.cnpj}</span>
                     <span className="flex items-center gap-1.5"><strong className="font-semibold text-slate-900 dark:text-slate-300">WhatsApp:</strong> {selectedClient.whatsapp}</span>
                     <span className="flex items-center gap-1.5"><strong className="font-semibold text-slate-900 dark:text-slate-300">Email:</strong> {selectedClient.email}</span>
+                    <span className="flex items-center gap-1.5"><strong className="font-semibold text-slate-900 dark:text-slate-300">Contato:</strong> {selectedClient.contato}</span>
                   </div>
                 </div>
-                <div className="flex gap-2 w-full md:w-auto mt-2 md:mt-0">
+                <div className="flex flex-wrap justify-end gap-2 w-full md:w-auto mt-4 md:mt-0">
                   <button 
                     onClick={handleChargeClient}
                     disabled={actionLoading}
@@ -324,6 +351,48 @@ export const CRM: React.FC = () => {
                   </h3>
                   {loadingTitles && <Loader2 className="animate-spin text-primary-500" size={20} />}
                 </div>
+
+                {titles.length > 0 && (
+                  <div className="mb-4 flex flex-wrap items-center gap-4 bg-white dark:bg-dark-surface p-4 rounded-2xl border border-slate-200 dark:border-dark-border shadow-sm">
+                    <div className="flex items-center gap-2">
+                      <input 
+                        type="checkbox" 
+                        checked={titles.length > 0 && selectedTitleIds.length === titles.length}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setSelectedTitleIds(titles.map(t => t.id));
+                          } else {
+                            setSelectedTitleIds([]);
+                          }
+                        }}
+                        className="w-5 h-5 rounded border-slate-300 text-primary-600 focus:ring-primary-500 cursor-pointer"
+                      />
+                      <span className="text-sm font-black uppercase text-slate-600 dark:text-slate-400">Selecionar Todos</span>
+                    </div>
+
+                    {selectedTitleIds.length > 0 && (
+                      <div className="flex flex-wrap items-center gap-2 ml-auto">
+                        <span className="text-[10px] font-black uppercase tracking-widest text-primary-600 bg-primary-100 px-3 py-1.5 rounded-full mr-2">
+                          {selectedTitleIds.length} Itens
+                        </span>
+                        <button 
+                          onClick={() => handleBulkUpdateStatus('Pago', 'Pausar')}
+                          disabled={actionLoading}
+                          className="px-4 py-2 text-xs font-black uppercase tracking-wider rounded-xl bg-primary-100 text-primary-700 hover:bg-primary-600 hover:text-white transition-all shadow-sm flex items-center gap-2"
+                        >
+                          <CheckCircle2 size={16} /> Marcar como Pago
+                        </button>
+                        <button 
+                          onClick={() => handleBulkUpdateStatus('Cartório', 'Cobrar')}
+                          disabled={actionLoading}
+                          className="px-4 py-2 text-xs font-black uppercase tracking-wider rounded-xl bg-red-100 text-red-700 hover:bg-red-600 hover:text-white transition-all shadow-sm flex items-center gap-2"
+                        >
+                          Enviar p/ Cartório
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
                 
                 {titles.length === 0 && !loadingTitles ? (
                   <div className="flex flex-col items-center justify-center py-20 text-slate-400 bg-white dark:bg-dark-surface rounded-2xl border-2 border-dashed border-slate-200 dark:border-dark-border">
@@ -333,9 +402,19 @@ export const CRM: React.FC = () => {
                 ) : (
                   <div className="grid grid-cols-1 gap-4">
                     {titles.map(t => (
-                      <div key={t.id} className="border border-slate-200 dark:border-dark-border rounded-2xl p-5 flex flex-col md:flex-row items-center justify-between gap-6 bg-white dark:bg-dark-surface shadow-sm hover:shadow-md transition-all">
-                        <div className="flex-1 w-full">
-                          <div className="flex flex-wrap items-center gap-3 mb-3">
+                      <div key={t.id} className="border border-slate-200 dark:border-dark-border rounded-2xl p-5 flex flex-col xl:flex-row items-center justify-between gap-6 bg-white dark:bg-dark-surface shadow-sm hover:shadow-md transition-all">
+                        <div className="flex items-center gap-4 w-full xl:w-auto flex-1">
+                          <input 
+                            type="checkbox"
+                            checked={selectedTitleIds.includes(t.id)}
+                            onChange={(e) => {
+                              if (e.target.checked) setSelectedTitleIds([...selectedTitleIds, t.id]);
+                              else setSelectedTitleIds(selectedTitleIds.filter(id => id !== t.id));
+                            }}
+                            className="w-5 h-5 rounded border-slate-300 text-primary-600 focus:ring-primary-500 cursor-pointer flex-shrink-0"
+                          />
+                          <div className="flex-1 w-full min-w-0">
+                            <div className="flex flex-wrap items-center gap-3 mb-3">
                             <span className="text-xl font-black text-slate-900 dark:text-white">R$ {t.valor.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</span>
                             <span className={`px-3 py-1 text-[10px] font-black uppercase tracking-widest rounded-full border-2 ${getStatusColor(t.status)}`}>
                               {t.status}
@@ -354,7 +433,7 @@ export const CRM: React.FC = () => {
                             <div className="space-y-0.5">
                               <p className="text-[10px] text-slate-400 uppercase font-black tracking-tight underline decoration-primary-200">Fluxo</p>
                               <select 
-                                value={t.acao}
+                                value={t.acao || 'Cobrar'}
                                 onChange={(e) => updateTitleStatus(t.id, t.status, e.target.value)}
                                 className="text-xs font-bold border-none bg-slate-100 dark:bg-slate-800 rounded-lg px-2 py-1 focus:ring-2 focus:ring-primary-500 w-full"
                               >
@@ -365,7 +444,7 @@ export const CRM: React.FC = () => {
                             <div className="space-y-0.5">
                               <p className="text-[10px] text-slate-400 uppercase font-black tracking-tight underline decoration-primary-200">Atualizar</p>
                               <select 
-                                value={t.status}
+                                value={t.status || 'Aberto'}
                                 onChange={(e) => updateTitleStatus(t.id, e.target.value, t.acao)}
                                 className="text-xs font-bold border-none bg-slate-100 dark:bg-slate-800 rounded-lg px-2 py-1 focus:ring-2 focus:ring-primary-500 w-full"
                               >
@@ -379,8 +458,9 @@ export const CRM: React.FC = () => {
                             </div>
                           </div>
                         </div>
+                        </div>
                         
-                        <div className="flex items-center gap-3 w-full md:w-auto">
+                        <div className="flex flex-wrap items-center gap-3 w-full xl:w-auto flex-shrink-0">
                           <button 
                             onClick={() => handleChargeTitle(t.id)}
                             disabled={actionLoading}

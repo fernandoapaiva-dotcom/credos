@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Layout } from '../components/ui/Layout';
 import { api } from '../context/AuthContext';
-import { Wallet, Users, FileWarning, TrendingUp, Loader2 } from 'lucide-react';
+import { Wallet, Users, FileWarning, TrendingUp, Loader2, RefreshCw, Send } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 interface DashboardData {
@@ -11,6 +11,7 @@ interface DashboardData {
     total_recebido: number;
     total_clientes: number;
     total_cartorio: number;
+    total_logs: number;
   };
   chart_data: Array<{
     name: string;
@@ -28,7 +29,8 @@ export const Dashboard: React.FC = () => {
     fetchStats();
   }, []);
 
-  const fetchStats = async () => {
+  const fetchStats = async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const res = await api.get('/crm/dashboard-stats');
       setData(res.data);
@@ -55,6 +57,20 @@ export const Dashboard: React.FC = () => {
 
   return (
     <Layout title="Dashboard Geral">
+      <div className="flex justify-between items-center mb-6">
+        <div>
+           <h2 className="text-sm font-bold text-slate-400 uppercase tracking-widest">Resumo Financeiro</h2>
+        </div>
+        <button 
+          onClick={() => fetchStats(false)} 
+          disabled={loading}
+          className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white dark:bg-dark-surface border border-slate-200 dark:border-dark-border text-slate-600 dark:text-slate-300 hover:text-primary-600 hover:border-primary-200 transition-all shadow-sm active:scale-95"
+        >
+          <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+          <span className="text-sm font-bold">Atualizar</span>
+        </button>
+      </div>
+
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
         
         <div className="card flex items-center p-6 gap-4 border-l-4 border-l-primary-500">
@@ -120,7 +136,7 @@ export const Dashboard: React.FC = () => {
                 <YAxis hide />
                 <Tooltip 
                   contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.1)' }}
-                  formatter={(value: number) => [formatCurrency(value), '']}
+                  formatter={(value: any) => [formatCurrency(Number(value || 0)), '']}
                 />
                 <Area type="monotone" dataKey="recebido" stroke="#10b981" strokeWidth={3} fillOpacity={1} fill="url(#colorRecebido)" name="Recebido" />
                 <Area type="monotone" dataKey="pendente" stroke="#6366f1" strokeWidth={3} fillOpacity={1} fill="url(#colorPendente)" name="Pendente" />
@@ -140,6 +156,19 @@ export const Dashboard: React.FC = () => {
         </div>
 
         <div className="card">
+          <h2 className="text-lg font-bold text-slate-800 dark:text-white mb-4">Métricas de Performance</h2>
+          <div className="grid grid-cols-1 gap-4 mb-6">
+             <div className="p-4 rounded-2xl bg-slate-50 dark:bg-dark-bg/50 border border-slate-100 dark:border-dark-border flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                   <div className="p-2 rounded-lg bg-primary-100 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400">
+                     <Send size={18} />
+                   </div>
+                   <span className="text-sm font-bold text-slate-600 dark:text-slate-400">Total Mensagens Enviadas</span>
+                </div>
+                <span className="text-xl font-black text-slate-900 dark:text-white">{data?.stats?.total_logs || 0}</span>
+             </div>
+          </div>
+
           <h2 className="text-lg font-bold text-slate-800 dark:text-white mb-4">Ações Rápidas</h2>
           <div className="space-y-3">
              <button onClick={() => navigate('/import')} className="w-full text-left px-4 py-3 rounded-lg border border-slate-200 dark:border-dark-border hover:bg-slate-50 dark:hover:bg-dark-bg transition-colors flex items-center justify-between group">
