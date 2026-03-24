@@ -514,12 +514,19 @@ def listar_logs_cliente_db(cnpj_empresa, nome_cliente):
 # 6. USUÁRIOS E LOGIN (CENTRAL)
 # ==============================================================================
 def verificar_login(user, pwd):
+    import bcrypt
     try:
         conn = conectar()
-        query = "SELECT * FROM usuarios WHERE login=? AND password=?"
-        res = conn.cursor().execute(query, (user, pwd)).fetchone()
+        query = "SELECT password FROM usuarios WHERE login=?"
+        res = conn.cursor().execute(query, (user,)).fetchone()
         conn.close()
-        return res is not None
+        if res:
+            hashed = res[0]
+            try:
+                return bcrypt.checkpw(pwd.encode('utf-8'), hashed.encode('utf-8'))
+            except:
+                return pwd == hashed # Fallback para texto plano se hash der erro
+        return False
     except Exception as e:
         print(f"Erro ao verificar login: {e}")
         return False

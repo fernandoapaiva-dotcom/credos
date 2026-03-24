@@ -31,26 +31,35 @@ def login(request: LoginRequest):
     try:
         conn = conectar() 
         # Buscamos a senha hasheada no banco
+        print(f"DEBUG: Tentativa de login para: {request.username}")
         query = "SELECT password, nome_completo, perfil, foto_b64 FROM usuarios WHERE login=?"
         res = conn.cursor().execute(query, (request.username,)).fetchone()
         conn.close()
         
         if res:
             hashed_password, nome_completo, perfil, foto_b64 = res
+            print(f"DEBUG: Usuário {request.username} encontrado no banco.")
             
             # Verificamos a senha
-            if bcrypt.checkpw(request.password.encode('utf-8'), hashed_password.encode('utf-8')):
-                token = create_access_token(data={"sub": request.username, "nome": nome_completo, "perfil": perfil})
-                return {
-                    "access_token": token,
-                    "token_type": "bearer",
-                    "user": {
-                        "username": request.username,
-                        "nome_completo": nome_completo,
-                        "perfil": perfil,
-                        "foto_b64": foto_b64
+            try:
+                match = bcrypt.checkpw(request.password.encode('utf-8'), hashed_password.encode('utf-8'))
+                print(f"DEBUG: Resultado bcrypt.checkpw: {match}")
+                if match:
+                    token = create_access_token(data={"sub": request.username, "nome": nome_completo, "perfil": perfil})
+                    return {
+                        "access_token": token,
+                        "token_type": "bearer",
+                        "user": {
+                            "username": request.username,
+                            "nome_completo": nome_completo,
+                            "perfil": perfil,
+                            "foto_b64": foto_b64
+                        }
                     }
-                }
+            except Exception as be:
+                print(f"DEBUG: Erro no bcrypt: {be}")
+        else:
+            print(f"DEBUG: Usuário {request.username} NÃO encontrado no banco.")
         
         # Se cair aqui, usuário não existe ou senha errada
         raise HTTPException(status_code=401, detail="Usuário ou senha incorretos.")
