@@ -6,7 +6,7 @@ services:
       - "8001:8001"
     volumes:
       - .:/app
-      - db-data:/app/data
+      - ./data:/app/data
     environment:
       - DATABASE_DIR=/app/data
     restart: always
@@ -20,5 +20,3 @@ services:
       - backend
     restart: always
 
-volumes:
-  db-data:
