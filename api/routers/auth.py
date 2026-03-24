@@ -27,28 +27,33 @@ def create_access_token(data: dict):
 
 @router.post("/login")
 def login(request: LoginRequest):
-    # Usando a mesma logica do Streamlit, mas retornando JWT
+    import bcrypt
     try:
         conn = conectar() 
-        query = "SELECT nome_completo, perfil, foto_b64 FROM usuarios WHERE login=? AND password=?"
-        res = conn.cursor().execute(query, (request.username, request.password)).fetchone()
+        # Buscamos a senha hasheada no banco
+        query = "SELECT password, nome_completo, perfil, foto_b64 FROM usuarios WHERE login=?"
+        res = conn.cursor().execute(query, (request.username,)).fetchone()
         conn.close()
         
         if res:
-            nome_completo, perfil, foto_b64 = res
-            token = create_access_token(data={"sub": request.username, "nome": nome_completo, "perfil": perfil})
-            return {
-                "access_token": token,
-                "token_type": "bearer",
-                "user": {
-                    "username": request.username,
-                    "nome_completo": nome_completo,
-                    "perfil": perfil,
-                    "foto_b64": foto_b64
+            hashed_password, nome_completo, perfil, foto_b64 = res
+            
+            # Verificamos a senha
+            if bcrypt.checkpw(request.password.encode('utf-8'), hashed_password.encode('utf-8')):
+                token = create_access_token(data={"sub": request.username, "nome": nome_completo, "perfil": perfil})
+                return {
+                    "access_token": token,
+                    "token_type": "bearer",
+                    "user": {
+                        "username": request.username,
+                        "nome_completo": nome_completo,
+                        "perfil": perfil,
+                        "foto_b64": foto_b64
+                    }
                 }
-            }
-        else:
-            raise HTTPException(status_code=401, detail="Usuário ou senha incorretos.")
+        
+        # Se cair aqui, usuário não existe ou senha errada
+        raise HTTPException(status_code=401, detail="Usuário ou senha incorretos.")
     except HTTPException:
         raise
     except Exception as e:
