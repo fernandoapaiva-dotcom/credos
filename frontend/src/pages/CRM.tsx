@@ -47,7 +47,6 @@ export const CRM: React.FC = () => {
   // Charge Preview State
   const [isShowingPreview, setIsShowingPreview] = useState(false);
   const [previewData, setPreviewData] = useState<any[]>([]);
-  const [previewLoading, setPreviewLoading] = useState(false);
   const [expandedPreviewClients, setExpandedPreviewClients] = useState<string[]>([]);
 
   const togglePreviewExpand = (name: string) => {
@@ -127,7 +126,6 @@ export const CRM: React.FC = () => {
   };
 
   const handleChargeAll = async (silent = false) => {
-    if (!silent) setPreviewLoading(true);
     try {
       const res = await api.post('/crm/preview-charge-all');
       setPreviewData(res.data.preview || []);
@@ -135,7 +133,7 @@ export const CRM: React.FC = () => {
     } catch(e) {
       if (!silent) alert("Erro ao gerar prévia de cobrança.");
     } finally {
-      if (!silent) setPreviewLoading(false);
+      // Finalizado
     }
   };
 

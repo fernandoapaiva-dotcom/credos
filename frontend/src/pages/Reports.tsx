@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Layout } from '../components/ui/Layout';
 import { api } from '../context/AuthContext';
-import { FileText, Download, Filter } from 'lucide-react';
+import { FileText, Download } from 'lucide-react';
 
 interface Client {
   id: number;
@@ -10,7 +10,6 @@ interface Client {
 
 export const Reports: React.FC = () => {
   const [clientes, setClientes] = useState<Client[]>([]);
-  const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
 
   // Form

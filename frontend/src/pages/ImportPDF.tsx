@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Layout } from '../components/ui/Layout';
 import { api } from '../context/AuthContext';
-import { UploadCloud, CheckCircle2, AlertTriangle, ArrowRight, PlusCircle, Trash2, Eye } from 'lucide-react';
+import { UploadCloud, CheckCircle2, AlertTriangle, Trash2, Eye } from 'lucide-react';
 
 interface LayoutData {
   id: number;
