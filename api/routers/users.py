@@ -14,6 +14,7 @@ class UserCreate(BaseModel):
     foto_b64: Optional[str] = None
 
 class UserUpdate(BaseModel):
+    login: Optional[str] = None
     nome_completo: Optional[str] = None
     perfil: Optional[str] = None
     password: Optional[str] = None
