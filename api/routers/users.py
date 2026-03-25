@@ -19,7 +19,7 @@ class UserUpdate(BaseModel):
     password: Optional[str] = None
     foto_b64: Optional[str] = None
 
-@router.get("/")
+@router.get("")
 def get_users():
     users = listar_usuarios()
     # Remove password from response for security
@@ -28,7 +28,7 @@ def get_users():
             del u["password"]
     return {"users": users}
 
-@router.post("/")
+@router.post("")
 def add_user(user: UserCreate):
     # Hash password
     hashed = bcrypt.hashpw(user.password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
