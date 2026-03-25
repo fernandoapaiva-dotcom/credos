@@ -77,7 +77,18 @@ class ConfirmarImportacaoReq(BaseModel):
 
 @router.post("/confirm")
 def confirmar_importacao(req: ConfirmarImportacaoReq, x_company_cnpj: str = Header(...)):
-    titulos_dicts = [t.dict() for t in req.titulos]
+    # Normalização de datas antes de salvar
+    titulos_dicts = []
+    for t in req.titulos:
+        d = t.dict()
+        data_suja = str(d['vencimento']).strip()
+        # Tenta normalizar D/M/YYYY para DD/MM/YYYY
+        if '/' in data_suja:
+            partes = data_suja.split('/')
+            if len(partes) == 3:
+                d['vencimento'] = f"{partes[0].zfill(2)}/{partes[1].zfill(2)}/{partes[2]}"
+        titulos_dicts.append(d)
+        
     salvar_dados_no_banco(x_company_cnpj, titulos_dicts)
     
     # Aqui vamos colocar a lógicas do item 7: "perguntar o que aconteceu com os títulos faltantes"

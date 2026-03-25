@@ -584,28 +584,41 @@ def obter_stats_dashboard(cnpj):
     total_logs = c.fetchone()[0] or 0
 
     # 6. Dados para o Gráfico (Resumo de Atividades)
-    # Extraímos MM/YYYY do vencimento (assumindo DD/MM/YYYY)
+    # Extraímos MM/YYYY do vencimento e processamos em Python para evitar erros de substr no SQL
     try:
-        c.execute("""
-            SELECT 
-                substr(vencimento, 4, 7) as mes_ano,
-                SUM(CASE WHEN status IN ('Pago', 'Baixado', 'Recebido') THEN valor ELSE 0 END) as valor_pago,
-                SUM(CASE WHEN status = 'Aberto' THEN valor ELSE 0 END) as valor_aberto
-            FROM titulos
-            WHERE vencimento LIKE '__/__/____'
-            GROUP BY mes_ano
-            ORDER BY substr(vencimento, 7, 4) ASC, substr(vencimento, 4, 2) ASC
-            LIMIT 12
-        """)
+        c.execute("SELECT vencimento, status, valor FROM titulos")
         rows = c.fetchall()
-        chart_data = []
-        for row in rows:
-            chart_data.append({
-                "name": row[0],
-                "recebido": row[1],
-                "pendente": row[2]
-            })
-    except:
+        
+        agrupados = {} # { "2026-03": {"name": "03/2026", "recebido": 0, "pendente": 0} }
+        
+        for venc, status, valor in rows:
+            if not venc or '/' not in str(venc): continue
+            
+            partes = str(venc).split('/')
+            if len(partes) == 3:
+                # Normaliza para YYYY-MM para ordenação e MM/YYYY para exibição
+                d, m, y = partes[0].zfill(2), partes[1].zfill(2), partes[2]
+                key = f"{y}-{m}"
+                display = f"{m}/{y}"
+                
+                if key not in agrupados:
+                    agrupados[key] = {"name": display, "recebido": 0, "pendente": 0}
+                
+                if status in ('Pago', 'Baixado', 'Recebido'):
+                    agrupados[key]["recebido"] += valor
+                elif status not in ('Cancelado', 'Excluído'):
+                    # Tudo que não for pago ou cancelado é pendente (Aberto, Negociado, Cartório, etc)
+                    agrupados[key]["pendente"] += valor
+        
+        # Ordenar chaves e pegar os últimos 12 meses
+        sorted_keys = sorted(agrupados.keys())
+        # Pegar os 12 mais recentes se houver muitos
+        if len(sorted_keys) > 12:
+            sorted_keys = sorted_keys[-12:]
+            
+        chart_data = [agrupados[k] for k in sorted_keys]
+    except Exception as e:
+        print(f"Erro ao gerar chart_data: {e}")
         chart_data = []
         
     # Data placeholder if empty
