@@ -197,13 +197,13 @@ export const Companies: React.FC = () => {
                   </button>
                 </div>
 
-                {c.logo_b64 ? (
-                  <img src={`data:image/png;base64,${c.logo_b64}`} className="w-16 h-16 rounded-full object-cover mb-4 shadow-sm" alt="Logo" />
-                ) : (
-                  <div className="w-16 h-16 rounded-full bg-slate-100 dark:bg-dark-bg text-slate-400 flex items-center justify-center mb-4 group-hover:text-primary-500 transition-colors">
-                    <Building2 size={32} />
-                  </div>
-                )}
+                <div className="w-20 h-20 rounded-xl bg-white flex items-center justify-center p-2 mb-4 shadow-md group-hover:scale-105 transition-transform overflow-hidden">
+                  {c.logo_b64 ? (
+                    <img src={c.logo_b64} className="max-w-full max-h-full object-contain" alt="Logo" />
+                  ) : (
+                    <Building2 size={32} className="text-slate-300" />
+                  )}
+                </div>
                 <h3 className="font-bold text-lg text-slate-900 dark:text-white text-center">{c.empresa_nome}</h3>
                 <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">CNPJ: {c.empresa_cnpj}</p>
                 <div className="mt-4 opacity-0 group-hover:opacity-100 transition-opacity flex items-center text-primary-600 dark:text-primary-400 text-sm font-medium gap-1">
