@@ -648,25 +648,44 @@ def alterar_senha_usuario(login, nova_senha):
         print(f"Erro ao alterar senha: {e}")
         return False
 
-def atualizar_usuario_db(login, nome_completo, perfil, senha=None, foto_b64=None, novo_login=None):
+def atualizar_usuario_db(login, nome_completo=None, perfil=None, senha=None, foto_b64=None, novo_login=None):
     try:
         conn = conectar()
         cursor = conn.cursor()
-        target_login = novo_login if novo_login else login
         
-        # Se for mudar o login, precisamos atualizar o campo login
+        # 1. Se for mudar o login (Primary Key), fazemos primeiro
         if novo_login and novo_login != login:
              cursor.execute("UPDATE usuarios SET login=? WHERE login=?", (novo_login, login))
              login = novo_login
              
-        if senha and foto_b64:
-            cursor.execute("UPDATE usuarios SET nome_completo=?, perfil=?, password=?, foto_b64=? WHERE login=?", (nome_completo, perfil, senha, foto_b64, login))
-        elif senha:
-            cursor.execute("UPDATE usuarios SET nome_completo=?, perfil=?, password=? WHERE login=?", (nome_completo, perfil, senha, login))
-        elif foto_b64:
-            cursor.execute("UPDATE usuarios SET nome_completo=?, perfil=?, foto_b64=? WHERE login=?", (nome_completo, perfil, foto_b64, login))
-        else:
-            cursor.execute("UPDATE usuarios SET nome_completo=?, perfil=? WHERE login=?", (nome_completo, perfil, login))
+        # 2. Construir query dinâmica para os outros campos
+        fields = []
+        values = []
+        
+        if nome_completo is not None:
+            fields.append("nome_completo=?")
+            values.append(nome_completo)
+        
+        if perfil is not None:
+            fields.append("perfil=?")
+            values.append(perfil)
+            
+        if senha is not None:
+            fields.append("password=?")
+            values.append(senha)
+            
+        if foto_b64 is not None:
+            fields.append("foto_b64=?")
+            values.append(foto_b64)
+            
+        if not fields:
+            conn.close()
+            return True # Nada para atualizar
+            
+        query = f"UPDATE usuarios SET {', '.join(fields)} WHERE login=?"
+        values.append(login)
+        
+        cursor.execute(query, tuple(values))
         conn.commit()
         conn.close()
         return True
