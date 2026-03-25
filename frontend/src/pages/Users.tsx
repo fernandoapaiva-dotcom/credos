@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Layout } from '../components/ui/Layout';
 import { api } from '../context/AuthContext';
-import { UserPlus, Trash2, Shield, User as UserIcon, Loader2, Mail, Edit, X } from 'lucide-react';
+import { UserPlus, Trash2, Shield, User as UserIcon, Loader2, Mail, Edit, X, Save } from 'lucide-react';
 
 interface User {
   login: string;
