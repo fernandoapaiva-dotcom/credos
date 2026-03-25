@@ -24,7 +24,7 @@ export const Users: React.FC = () => {
   const fetchUsers = async () => {
     setLoading(true);
     try {
-      const res = await api.get('/api/users');
+      const res = await api.get('/users');
       setUsers(res.data.users);
     } catch (e) {
       console.error('Erro ao buscar usuários', e);
@@ -37,7 +37,7 @@ export const Users: React.FC = () => {
     e.preventDefault();
     setSaving(true);
     try {
-      await api.post('/api/users', newUser);
+      await api.post('/users', newUser);
       setShowModal(false);
       setNewUser({ login: '', password: '', nome_completo: '', perfil: 'operador' });
       fetchUsers();
@@ -51,7 +51,7 @@ export const Users: React.FC = () => {
   const handleDeleteUser = async (login: string) => {
     if (!window.confirm(`Tem certeza que deseja excluir o usuário ${login}?`)) return;
     try {
-      await api.delete(`/api/users/${login}`);
+      await api.delete(`/users/${login}`);
       fetchUsers();
     } catch (e: any) {
       alert(e.response?.data?.detail || 'Erro ao excluir usuário');
