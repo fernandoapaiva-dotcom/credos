@@ -12,9 +12,11 @@ interface AuthContextType {
   user: User | null;
   token: string | null;
   companyCnpj: string | null;
+  companyLogo: string | null;
   login: (token: string, user: User) => void;
   logout: () => void;
   setCompany: (cnpj: string) => void;
+  updateCompanyLogo: (logo: string) => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -33,6 +35,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [token, setToken] = useState<string | null>(() => localStorage.getItem('token'));
   
   const [companyCnpj, setCompanyCnpj] = useState<string | null>(() => localStorage.getItem('companyCnpj'));
+  const [companyLogo, setCompanyLogo] = useState<string | null>(null);
 
   useEffect(() => {
     if (token) {
@@ -43,10 +46,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     
     if (companyCnpj) {
       api.defaults.headers.common['x-company-cnpj'] = companyCnpj;
+      fetchCompanyLogo(companyCnpj);
     } else {
       delete api.defaults.headers.common['x-company-cnpj'];
+      setCompanyLogo(null);
     }
   }, [token, companyCnpj]);
+
+  const fetchCompanyLogo = async (cnpj: string) => {
+    try {
+      const res = await api.get(`/companies/${cnpj}/config`);
+      setCompanyLogo(res.data.logo_b64 || null);
+    } catch (e) {
+      setCompanyLogo(null);
+    }
+  };
 
   const login = (newToken: string, newUser: User) => {
     setToken(newToken);
@@ -59,6 +73,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setToken(null);
     setUser(null);
     setCompanyCnpj(null);
+    setCompanyLogo(null);
     localStorage.removeItem('token');
     localStorage.removeItem('user');
     localStorage.removeItem('companyCnpj');
@@ -66,11 +81,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const setCompany = (cnpj: string) => {
     setCompanyCnpj(cnpj);
-    localStorage.setItem('companyCnpj', cnpj);
+    if (cnpj) {
+      localStorage.setItem('companyCnpj', cnpj);
+    } else {
+      localStorage.removeItem('companyCnpj');
+    }
+  };
+
+  const updateCompanyLogo = (logo: string) => {
+    setCompanyLogo(logo);
   };
 
   return (
-    <AuthContext.Provider value={{ user, token, companyCnpj, login, logout, setCompany }}>
+    <AuthContext.Provider value={{ user, token, companyCnpj, companyLogo, login, logout, setCompany, updateCompanyLogo }}>
       {children}
     </AuthContext.Provider>
   );

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Layout } from '../components/ui/Layout';
-import { api } from '../context/AuthContext';
+import { useAuth, api } from '../context/AuthContext';
 import { Save, RefreshCw, QrCode, PowerOff, Loader2, Sparkles, Upload, Image as ImageIcon, X } from 'lucide-react';
 
 export const Settings: React.FC = () => {
@@ -25,6 +25,8 @@ export const Settings: React.FC = () => {
 
   // Tab: IA
   const [scheduler, setScheduler] = useState<any>({ dias: [], hora: '09:00', ignorar_feriados: true, ativo: false });
+
+  const { updateCompanyLogo } = useAuth();
 
   useEffect(() => {
     // Read the current selected company from local storage implicitly or state
@@ -54,6 +56,9 @@ export const Settings: React.FC = () => {
     setLoading(true);
     try {
       await api.patch(`/companies/${companyCnpj}/config`, config);
+      if (config.logo_b64) {
+        updateCompanyLogo(config.logo_b64);
+      }
       alert('Configurações salvas com sucesso!');
     } catch (e) {
       alert('Erro ao salvar');
