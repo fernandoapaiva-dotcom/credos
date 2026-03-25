@@ -2,7 +2,7 @@ import React from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Users, FileText, UploadCloud, LogOut, Sun, Moon, ArrowLeftRight, Settings } from 'lucide-react';
+import { LayoutDashboard, Users, FileText, UploadCloud, LogOut, Sun, Moon, ArrowLeftRight, Settings, Shield } from 'lucide-react';
 import clsx from 'clsx';
 
 interface LayoutProps {
