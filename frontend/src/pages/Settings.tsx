@@ -252,7 +252,7 @@ export const Settings: React.FC = () => {
                   </div>
                </div>
 
-               <div className="border-2 border-dashed border-slate-200 dark:border-dark-border rounded-xl p-6 flex flex-col items-center justify-center bg-slate-50/50 dark:bg-dark-bg/20 min-h-[140px]">
+               <div className="border-2 border-dashed border-slate-200 dark:border-dark-border rounded-xl p-6 flex flex-col items-center justify-center bg-white min-h-[140px] shadow-inner">
                   {config.logo_b64 ? (
                      <div className="relative group">
                         <img src={config.logo_b64} alt="Preview Logo" className="max-h-24 object-contain shadow-md rounded" />
