@@ -50,11 +50,18 @@ def remove_user(login: str):
 
 @router.patch("/{login}")
 def update_user(login: str, updates: UserUpdate):
+    print(f"DEBUG: Tentando atualizar usuario: {login}")
+    print(f"DEBUG: Updates: {updates.dict(exclude_unset=True)}")
+    
     hashed_pwd = None
     if updates.password:
         hashed_pwd = bcrypt.hashpw(updates.password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
     
-    if atualizar_usuario_db(login, updates.nome_completo, updates.perfil, hashed_pwd, updates.foto_b64, updates.login):
-        return {"success": True, "message": "Usuário atualizado."}
-    else:
-        raise HTTPException(status_code=400, detail="Erro ao atualizar usuário.")
+    try:
+        if atualizar_usuario_db(login, updates.nome_completo, updates.perfil, hashed_pwd, updates.foto_b64, updates.login):
+            return {"success": True, "message": "Usuário atualizado."}
+        else:
+            raise HTTPException(status_code=400, detail="Erro ao atualizar usuário no banco.")
+    except Exception as e:
+        print(f"DEBUG: Erro fatal no update: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
