@@ -44,20 +44,24 @@ def login(request: LoginRequest):
             try:
                 match = bcrypt.checkpw(request.password.encode('utf-8'), hashed_password.encode('utf-8'))
                 print(f"DEBUG: Resultado bcrypt.checkpw: {match}")
-                if match:
-                    token = create_access_token(data={"sub": request.username, "nome": nome_completo, "perfil": perfil})
-                    return {
-                        "access_token": token,
-                        "token_type": "bearer",
-                        "user": {
-                            "username": request.username,
-                            "nome_completo": nome_completo,
-                            "perfil": perfil,
-                            "foto_b64": foto_b64
-                        }
-                    }
             except Exception as be:
-                print(f"DEBUG: Erro no bcrypt: {be}")
+                print(f"DEBUG: Erro no bcrypt (provável senha plano): {be}")
+                # Fallback para texto plano se o banco tiver a senha sem hash
+                match = (request.password == hashed_password)
+                print(f"DEBUG: Resultado fallback texto plano: {match}")
+                
+            if match:
+                token = create_access_token(data={"sub": request.username, "nome": nome_completo, "perfil": perfil})
+                return {
+                    "access_token": token,
+                    "token_type": "bearer",
+                    "user": {
+                        "username": request.username,
+                        "nome_completo": nome_completo,
+                        "perfil": perfil,
+                        "foto_b64": foto_b64
+                    }
+                }
         else:
             print(f"DEBUG: Usuário {request.username} NÃO encontrado no banco.")
         
