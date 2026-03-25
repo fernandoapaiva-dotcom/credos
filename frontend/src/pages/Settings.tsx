@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Layout } from '../components/ui/Layout';
 import { api } from '../context/AuthContext';
-import { Save, RefreshCw, QrCode, PowerOff, Loader2, Sparkles } from 'lucide-react';
+import { Save, RefreshCw, QrCode, PowerOff, Loader2, Sparkles, Upload, Image as ImageIcon, X } from 'lucide-react';
 
 export const Settings: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'dados' | 'whatsapp' | 'email' | 'ia'>('dados');
@@ -59,6 +59,17 @@ export const Settings: React.FC = () => {
       alert('Erro ao salvar');
     }
     setLoading(false);
+  };
+
+  const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setConfig({ ...config, logo_b64: reader.result as string });
+      };
+      reader.readAsDataURL(file);
+    }
   };
 
   const saveScheduler = async () => {
@@ -210,6 +221,45 @@ export const Settings: React.FC = () => {
                   onChange={e => setConfig({...config, dias_para_cartorio: Number(e.target.value)})} 
                 />
               </div>
+            </div>
+            
+            <hr className="border-slate-200 dark:border-dark-border" />
+            
+            <h3 className="text-lg font-bold dark:text-white mb-4">Aparência e Marca (White-label)</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-start">
+               <div className="space-y-4">
+                  <label className="block text-sm font-medium">Logotipo da Empresa</label>
+                  <p className="text-xs text-slate-500 mb-4">Esta logo será exibida no Dashboard e no cabeçalho de todos os relatórios PDF.</p>
+                  
+                  <div className="flex items-center gap-4">
+                     <label className="btn-secondary cursor-pointer">
+                        <Upload size={18} className="mr-2" /> Escolher Imagem
+                        <input type="file" className="hidden" accept="image/*" onChange={handleLogoUpload} />
+                     </label>
+                     {config.logo_b64 && (
+                        <button 
+                          onClick={() => setConfig({...config, logo_b64: ''})}
+                          className="text-red-500 text-sm hover:underline flex items-center"
+                        >
+                          <X size={14} className="mr-1" /> Remover
+                        </button>
+                     )}
+                  </div>
+               </div>
+
+               <div className="border-2 border-dashed border-slate-200 dark:border-dark-border rounded-xl p-6 flex flex-col items-center justify-center bg-slate-50/50 dark:bg-dark-bg/20 min-h-[140px]">
+                  {config.logo_b64 ? (
+                     <div className="relative group">
+                        <img src={config.logo_b64} alt="Preview Logo" className="max-h-24 object-contain shadow-md rounded" />
+                        <div className="mt-2 text-[10px] text-center text-slate-400 font-mono">Resolução Nativa</div>
+                     </div>
+                  ) : (
+                     <div className="text-center text-slate-400">
+                        <ImageIcon size={48} className="mx-auto mb-2 opacity-20" />
+                        <p className="text-xs font-medium italic">Nenhuma logo carregada ainda</p>
+                     </div>
+                  )}
+               </div>
             </div>
 
             <div className="flex justify-end pt-4">

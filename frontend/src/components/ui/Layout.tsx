@@ -27,6 +27,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, title }) => {
     { label: 'Importar PDF', icon: UploadCloud, path: '/import' },
     { label: 'Relatórios', icon: FileText, path: '/reports' },
     { label: 'Configurações', icon: Settings, path: '/settings' },
+    ...(user?.perfil === 'admin' ? [{ label: 'Usuários', icon: Shield, path: '/users' }] : []),
   ];
 
   return (

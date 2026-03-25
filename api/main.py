@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from api.routers import auth, companies, crm, reports, import_pdf
+from api.routers import auth, companies, crm, reports, import_pdf, users
 from contextlib import asynccontextmanager
 import asyncio
 import schedule
@@ -31,6 +31,7 @@ app.add_middleware(
 )
 
 # Adicionando os modulos
+app.include_router(users.router, prefix="/api/users", tags=["Users Management"])
 app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
 app.include_router(companies.router, prefix="/api/companies", tags=["Companies"])
 app.include_router(crm.router, prefix="/api/crm", tags=["CRM & Titles"])
