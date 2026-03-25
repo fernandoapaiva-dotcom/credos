@@ -648,10 +648,17 @@ def alterar_senha_usuario(login, nova_senha):
         print(f"Erro ao alterar senha: {e}")
         return False
 
-def atualizar_usuario_db(login, nome_completo, perfil, senha=None, foto_b64=None):
+def atualizar_usuario_db(login, nome_completo, perfil, senha=None, foto_b64=None, novo_login=None):
     try:
         conn = conectar()
         cursor = conn.cursor()
+        target_login = novo_login if novo_login else login
+        
+        # Se for mudar o login, precisamos atualizar o campo login
+        if novo_login and novo_login != login:
+             cursor.execute("UPDATE usuarios SET login=? WHERE login=?", (novo_login, login))
+             login = novo_login
+             
         if senha and foto_b64:
             cursor.execute("UPDATE usuarios SET nome_completo=?, perfil=?, password=?, foto_b64=? WHERE login=?", (nome_completo, perfil, senha, foto_b64, login))
         elif senha:
