@@ -41,14 +41,29 @@ def verificar_sso_token(sso_token: str):
         used_at = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
         supabase.table("sso_tokens").update({"used_at": used_at}).eq("id", sso_token).execute()
         
-        # 3. Buscar usuário no SQLite local do Credos
+        # 3. Buscar ou criar usuário no SQLite local do Credos
         conn = conectar() 
+        cursor = conn.cursor()
         query = "SELECT nome_completo, perfil, foto_b64 FROM usuarios WHERE login=?"
-        u_res = conn.cursor().execute(query, (user_email,)).fetchone()
-        conn.close()
+        u_res = cursor.execute(query, (user_email,)).fetchone()
         
         if not u_res:
-            return False, None, f"O e-mail '{user_email}' está no Hub mas não está cadastrado no Credos."
+            # JIT Provisioning: Cria o usuário se ele não existir
+            print(f"DEBUG SSO: Usuário '{user_email}' não encontrado localmente. Criando automaticamente...")
+            # Extrair um nome amigável do e-mail (ex: joao.silva@servweld.com.br -> Joao Silva)
+            default_name = user_email.split('@')[0].replace('.', ' ').title()
+            
+            # Senha aleatória/inutilizável para usuários SSO
+            cursor.execute(
+                "INSERT INTO usuarios (login, password, nome_completo, perfil, status) VALUES (?, ?, ?, ?, ?)",
+                (user_email, "SSO_USER_NO_PASSWORD", default_name, "operador", "Ativo")
+            )
+            conn.commit()
+            
+            # Recarrega os dados do novo usuário
+            u_res = (default_name, "operador", None)
+            
+        conn.close()
             
         nome_completo, perfil, foto_b64 = u_res
         
