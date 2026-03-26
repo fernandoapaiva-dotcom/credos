@@ -9,6 +9,8 @@ services:
       - ./data:/app/data
     environment:
       - DATABASE_DIR=/app/data
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
     restart: always
 
   frontend:
