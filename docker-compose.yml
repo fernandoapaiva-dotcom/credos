@@ -11,6 +11,8 @@ services:
       - DATABASE_DIR=/app/data
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+    env_file:
+      - .env
     restart: always
 
   frontend:
