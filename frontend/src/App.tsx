@@ -1,5 +1,5 @@
 import React from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
 import { Login } from './pages/Login';
@@ -13,14 +13,26 @@ import { Users } from './pages/Users';
 
 const PrivateRoute: React.FC<{ children: React.ReactNode, requireCompany?: boolean }> = ({ children, requireCompany }) => {
   const { user, companyCnpj } = useAuth();
+  const location = useLocation();
   
-  if (!user) return <Navigate to="/login" replace />;
+  if (!user) {
+    // Preservar o sso_token se ele existir na URL atual
+    if (location.search) {
+      console.log('DEBUG SSO Catch: Usuário não logado, preservando parâmetros para login:', location.search);
+    }
+    return <Navigate to={`/login${location.search}`} replace />;
+  }
   
   if (requireCompany && !companyCnpj) {
     return <Navigate to="/companies" replace />;
   }
   
   return <>{children}</>;
+};
+
+const HomeRedirect: React.FC = () => {
+  const location = useLocation();
+  return <Navigate to={`/dashboard${location.search}`} replace />;
 };
 
 function App() {
@@ -73,7 +85,7 @@ function App() {
               </PrivateRoute>
             } />
             
-            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/" element={<HomeRedirect />} />
           </Routes>
         </BrowserRouter>
       </AuthProvider>

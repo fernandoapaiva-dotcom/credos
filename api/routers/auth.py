@@ -4,6 +4,17 @@ from typing import Optional
 from src.database import conectar
 import jwt
 import datetime
+import os
+from supabase import create_client, Client
+
+# --- SUPABASE CONFIG ---
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY")
+
+if SUPABASE_URL and SUPABASE_ANON_KEY:
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+else:
+    supabase = None
 
 router = APIRouter()
 
@@ -96,3 +107,34 @@ def forgot_password(request: ForgotPasswordRequest):
     print(f"EMAIL SIMULADO PARA: {request.email} - LINK DE RESET: http://localhost:5173/reset-password?token={reset_token}")
     
     return {"message": "Se o email estiver cadastrado, as instruções foram enviadas."}
+
+from src.auth_utils import verificar_sso_token
+
+@router.get("/sso-login")
+def sso_login(sso_token: str):
+    print(f"DEBUG SSO: Iniciando login para o token: {sso_token}")
+    
+    sucesso, user_data, msg = verificar_sso_token(sso_token)
+    
+    if not sucesso:
+        print(f"DEBUG SSO: {msg}")
+        if "Configuração" in msg:
+            raise HTTPException(status_code=500, detail=msg)
+        elif "não está cadastrado" in msg:
+            raise HTTPException(status_code=404, detail=msg)
+        else:
+            raise HTTPException(status_code=401, detail=msg)
+    
+    # Gerar Token JWT do Credos (sucesso!)
+    print(f"DEBUG SSO: Login efetuado com sucesso para {user_data['nome_completo']}")
+    token = create_access_token(data={
+        "sub": user_data["username"], 
+        "nome": user_data["nome_completo"], 
+        "perfil": user_data["perfil"]
+    })
+    
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user": user_data
+    }

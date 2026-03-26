@@ -17,6 +17,36 @@ export const Login: React.FC = () => {
   const { login } = useAuth();
   const navigate = useNavigate();
 
+  // Single Sign-On (SSO) Logic
+  React.useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const ssoToken = params.get('sso_token');
+
+    if (ssoToken) {
+      console.log('DEBUG SSO: sso_token detectado na URL:', ssoToken);
+      const performSSO = async () => {
+        setLoading(true);
+        setError('');
+        try {
+          console.log('DEBUG SSO: Chamando backend para validar token...');
+          const res = await axios.get(`/api/auth/sso-login?sso_token=${ssoToken}`);
+          console.log('DEBUG SSO: Login efetuado com sucesso!', res.data.user.username);
+          login(res.data.access_token, res.data.user);
+          navigate('/companies');
+        } catch (err: any) {
+          const detail = err.response?.data?.detail || 'Falha no login automático via SSO.';
+          console.error('DEBUG SSO: Erro na validação do token:', detail);
+          setError(detail);
+          // Remove o token da URL para evitar tentativas infinitas se falhar
+          window.history.replaceState({}, document.title, window.location.pathname);
+        } finally {
+          setLoading(false);
+        }
+      };
+      performSSO();
+    }
+  }, [login, navigate]);
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');

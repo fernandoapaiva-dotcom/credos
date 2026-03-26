@@ -70,8 +70,23 @@ def renderizar_logo(b64_string, tamanho=50):
     if b64_string: return f'<img src="data:image/png;base64,{b64_string}" style="width:{tamanho}px; height:{tamanho}px; border-radius:50%; vertical-align:middle; border:2px solid #eee;">'
     return "🏢"
 
+from src.auth_utils import verificar_sso_token
+
 # --- LOGIN ---
 if 'logged_in' not in st.session_state: st.session_state.logged_in = False
+
+# Verificação de SSO via URL (Hub Servweld)
+sso_token = st.query_params.get("sso_token")
+if sso_token and not st.session_state.logged_in:
+    sucesso, user_data, msg = verificar_sso_token(sso_token)
+    if sucesso:
+        st.session_state.logged_in = True
+        st.session_state.usuario_atual = user_data["username"]
+        # Limpa o token da URL para evitar reuso/estética
+        st.query_params.clear()
+        st.rerun()
+    else:
+        st.error(f"Erro no Login via Hub: {msg}")
 
 def fazer_login():
     if verificar_login(st.session_state.u_input, st.session_state.p_input):

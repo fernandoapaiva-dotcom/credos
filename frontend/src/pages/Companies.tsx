@@ -51,6 +51,15 @@ export const Companies: React.FC = () => {
     fetchCompanies();
   }, []);
 
+  // Seleção automática se houver apenas uma empresa (Otimização para SSO/Hub)
+  useEffect(() => {
+    if (!loading && companies.length === 1 && !isAdding && !isEditing) {
+      const singleCompany = companies[0];
+      console.log(`Auto-selecionando empresa única: ${singleCompany.empresa_nome}`);
+      handleSelect(singleCompany.empresa_cnpj);
+    }
+  }, [loading, companies, isAdding, isEditing]);
+
   const handleSelect = (cnpj: string) => {
     setCompany(cnpj);
     navigate('/dashboard');

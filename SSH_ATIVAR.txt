@@ -1,0 +1,20 @@
+ssh -i "C:\Antigravity\credos\OCI\ssh-key-2026-03-24.key" ubuntu@167.234.252.109
+---------------------------------------------------------
+verificaocao no Docker:
+cd ~/credos
+
+docker compose logs backend | tail -n 20
+
+---------------------------------------------------------
+# 1. Cria um arquivo de 2GB para ser usado como memória extra
+sudo fallocate -l 2G /swapfile
+# 2. Ajusta as permissões de segurança
+sudo chmod 600 /swapfile
+# 3. Formata o arquivo como Swap
+sudo mkswap /swapfile
+# 4. Ativa a memória agora
+sudo swapon /swapfile
+# 5. Faz com que essa memória continue ativa mesmo se reiniciar o servidor
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+# 6. Verifica se funcionou (deve aparecer uma linha 'Swap')
+free -h
