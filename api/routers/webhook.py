@@ -49,52 +49,29 @@ async def _timeout_concierge(op_num_limpo: str, cliente_nome: str, num_cliente: 
     try:
         evo_t = EvolutionController(config=config, nome_empresa_cliente=instance_name)
         op_num = config.get('operador_whatsapp', '')
-        neg = RAGNegotiator(cnpj)
         
         # 1. Analu avisa que estão ocupados e pede que o cliente descreva o problema
-        evo_t.enviar_mensagem_texto(
-            num_cliente,
+        msg_analu = (
+            "*Analu (Assistente Virtual) Diz:*\n\n"
             "No momento todos os nossos atendentes estão em outro chamado. "
             "Mas pode me dizer mais sobre o que você precisa? "
             "Vou garantir que a gente te dá um retorno rapidinho. 😉"
         )
+        evo_t.enviar_mensagem_texto(num_cliente, msg_analu)
         
-        # 2. Aguarda o cliente responder (até 60s)
-        await asyncio.sleep(60)
+        # 2. Atualiza o estado da sessão para que as próximas mensagens do cliente não caguem o operador, mas caiam no intent 'suporte_para_financeiro'
+        _atualizar_sessao(cnpj, session_id, estado='analu_assumiu_suporte')
         
-        # 3. Buscar histórico atualizado para pegar o que o cliente descreveu
-        sessao_atual = _obter_sessao_ativa(cnpj, num_cliente)
-        history_list = []
-        ultima_mensagem_cliente = texto_original
-        if sessao_atual:
-            try:
-                history_list = json.loads(sessao_atual.get('history_json') or '[]')
-                # Pega a última mensagem do cliente no histórico
-                for msg in reversed(history_list):
-                    if msg.get('role') == 'user':
-                        ultima_mensagem_cliente = msg.get('text', texto_original)
-                        break
-            except: pass
-        
-        # 4. Analu informa que vai repassar o recado e já encaminha a transição
-        evo_t.enviar_mensagem_texto(
-            num_cliente,
-            "Anotei tudo aqui. Assim que um atendente ficar livre eu encaminho para ele, tudo bem? "
-            "Ah, e aproveitando, eu cuido também da parte financeira por aqui. Vi que tem uma pendência em aberto com a gente — "
-            "se quiser, posso já verificar como a gente resolve isso enquanto aguarda?"
-        )
-        
-        # 5. Log interno — avisa o operador com resumo
+        # 3. Log interno — avisa o operador
         if op_num:
             evo_t.enviar_mensagem_texto(
                 op_num,
                 f"⏱️ *Timeout — Analu assumiu o atendimento de {cliente_nome}*\n"
-                f"💬 Cliente disse: \"{ultima_mensagem_cliente}\"\n"
-                f"💰 Débito: R$ {info_debito['total']:,.2f}\n"
-                f"Use *▶️ RESUMIR_IA_{cnpj}_{session_id}* para retomar quando quiser."
+                f"💬 Status: IA está conversando ativamente sobre o suporte para eventualmente puxar para a dívida.\n"
+                f"Use *🚫 PAUSAR_IA_{cnpj}_{session_id}* se quiser assumir o controle."
             )
         
-        _log_webhook(f"TIMEOUT: Analu assumiu e encaminhou atendimento de {cliente_nome}.")
+        _log_webhook(f"TIMEOUT: Analu assumiu o atendimento de {cliente_nome} no modo suporte_para_financeiro.")
     except Exception as e:
         _log_webhook(f"Erro no timeout do concierge: {e}", "ERROR")
 
@@ -269,7 +246,8 @@ async def receber_webhook_evolution(request: Request):
                             resp_limpa = re.sub(r'\[ACTION:[^\]]*\]', '', resp_limpa).strip()
                             resp_limpa = re.sub(r'\n{3,}', '\n\n', resp_limpa).strip()
                             
-                            evo_op.enviar_mensagem_texto(ctx["num_cliente"], resp_limpa)
+                            msg_final = f"*Analu (Assistente Virtual) Diz:*\n\n{resp_limpa}"
+                            evo_op.enviar_mensagem_texto(ctx["num_cliente"], msg_final)
                             
                             history_list.append({"role": "user", "text": txt_cliente})
                             history_list.append({"role": "model", "text": resp_limpa})
@@ -438,6 +416,11 @@ async def receber_webhook_evolution(request: Request):
                 _log_webhook("Saudação simples detectada — IA responde naturalmente sem notificar operador.")
             else:
                 intent = negotiator.classificar_intencao_concierge(texto)
+                
+            if intent == 'nao_financeiro' and sessao and sessao.get('estado') == 'analu_assumiu_suporte':
+                intent = 'suporte_para_financeiro'
+                _log_webhook("Sessão assumida pelo timeout. Mantendo intent como suporte_para_financeiro.")
+                
             _log_webhook(f"Intenção detectada: {intent}")
 
             if intent == 'nao_financeiro':
@@ -509,7 +492,8 @@ async def receber_webhook_evolution(request: Request):
             # Remove linhas em branco duplas deixadas pelas tags removidas
             resp_limpa = re.sub(r'\n{3,}', '\n\n', resp_limpa).strip()
             
-            evo.enviar_mensagem_texto(numero_raw, resp_limpa)
+            msg_final = f"*Analu (Assistente Virtual) Diz:*\n\n{resp_limpa}"
+            evo.enviar_mensagem_texto(numero_raw, msg_final)
             
             history_list.append({"role": "user", "text": texto})
             history_list.append({"role": "model", "text": resp_limpa})

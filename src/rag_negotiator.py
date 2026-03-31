@@ -193,8 +193,21 @@ class RAGNegotiator:
                 "você PODE mencionar sutilmente que tem 'um assunto financeiro pra tratar' — mas sem detalhar ainda. "
                 "Não force. Deixe fluir."
             )
+        elif intent == 'suporte_para_financeiro':
+            # Analu atuando como "ombro amigo" do suporte, ouvindo o problema e puxando pra dívida
+            prompt = (
+                f"{hist_text}"
+                f"Mensagem do cliente: \"{mensagem_cliente}\"\n\n"
+                f"[Contexto financeiro]\n"
+                f"Débito em aberto: R$ {total:.2f}\n"
+                f"{titulos_str}\n"
+                "INSTRUÇÃO: O cliente está descrevendo um problema não financeiro (ex: suporte, loja, etc) porque os atendentes estão ocupados. "
+                "Responda ao problema dele ('Empatia, diga que já está anotando tudo para passar para a equipe técnica/responsável'). "
+                "Se a conversa permitir naturalidade, comece a introduzir o assunto da pendência financeira de forma bem leve (ex: 'Ah, e aproveitando que estamos conversando, vi que tem uma pendência...'). "
+                "Cuidado para não parecer um robô ignorando o problema dele."
+            )
         else:
-            # CONVERSA AVANÇADA — pode ser mais direta sobre a dívida
+            # CONVERSA AVANÇADA FINANCEIRA — pode ser mais direta sobre a dívida
             prompt = (
                 f"{hist_text}"
                 f"Mensagem do cliente: \"{mensagem_cliente}\"\n\n"
@@ -203,7 +216,7 @@ class RAGNegotiator:
                 f"{titulos_str}"
                 f"{pix_info}\n\n"
                 "INSTRUÇÃO: A conversa já está fluindo. Responda ao que foi dito e, de forma natural, "
-                "conduza para resolver a pendência. Seja empática mas firme. "
+                "conduza para resolver a pendência financeira. Seja empática mas firme. "
                 "Se o cliente der data de pagamento: |||ACAO: ACORDO_ALCANCADO: DATA|||. "
                 "Se pedir PIX: informe. Se pedir boleto: |||ACAO: ENVIAR_BOLETOS|||. "
                 "Esses marcadores NÃO aparecem para o cliente."
