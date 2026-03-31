@@ -8,15 +8,18 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# Install system dependencies (needed for some python packages or sqlite)
+# Install system dependencies (needed for playwright and sqlite)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install dependencies
-# Note: I'll create a requirements.txt if it doesn't exist
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Install Playwright and its dependencies
+RUN playwright install --with-deps chromium
 
 # Copy the rest of the application code
 COPY . .

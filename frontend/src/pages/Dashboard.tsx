@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Layout } from '../components/ui/Layout';
 import { api } from '../context/AuthContext';
-import { Wallet, Users, FileWarning, TrendingUp, Loader2, RefreshCw, Send } from 'lucide-react';
+import { Wallet, Users, FileWarning, TrendingUp, Loader2, RefreshCw, Send, Sparkles, Building2 } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 interface DashboardData {
@@ -12,6 +12,8 @@ interface DashboardData {
     total_clientes: number;
     total_cartorio: number;
     total_logs: number;
+    total_negociacoes: number;
+    total_cartorio_jobs: number;
   };
   chart_data: Array<{
     name: string;
@@ -163,9 +165,29 @@ export const Dashboard: React.FC = () => {
                    <div className="p-2 rounded-lg bg-primary-100 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400">
                      <Send size={18} />
                    </div>
-                   <span className="text-sm font-bold text-slate-600 dark:text-slate-400">Total Mensagens Enviadas</span>
+                   <span className="text-sm font-bold text-slate-600 dark:text-slate-400">Mensagens Enviadas</span>
                 </div>
                 <span className="text-xl font-black text-slate-900 dark:text-white">{data?.stats?.total_logs || 0}</span>
+             </div>
+
+             <div className="p-4 rounded-2xl bg-slate-50 dark:bg-dark-bg/50 border border-slate-100 dark:border-dark-border flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                   <div className="p-2 rounded-lg bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400">
+                     <Sparkles size={18} />
+                   </div>
+                   <span className="text-sm font-bold text-slate-600 dark:text-slate-400">Negociações IA (Gemini)</span>
+                </div>
+                <span className="text-xl font-black text-slate-900 dark:text-white">{data?.stats?.total_negociacoes || 0}</span>
+             </div>
+
+             <div className="p-4 rounded-2xl bg-slate-50 dark:bg-dark-bg/50 border border-slate-100 dark:border-dark-border flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                   <div className="p-2 rounded-lg bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400">
+                     <Building2 size={18} />
+                   </div>
+                   <span className="text-sm font-bold text-slate-600 dark:text-slate-400">Fila de Cartório (Automático)</span>
+                </div>
+                <span className="text-xl font-black text-slate-900 dark:text-white">{data?.stats?.total_cartorio_jobs || 0}</span>
              </div>
           </div>
 

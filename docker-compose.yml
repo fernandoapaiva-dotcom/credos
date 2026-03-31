@@ -1,4 +1,56 @@
+version: '3.8'
+
 services:
+  # 1. Banco de Dados da Evolution (Postgres)
+  evolution_db:
+    image: postgres:15
+    container_name: evolution_db
+    restart: always
+    environment:
+      POSTGRES_USER: evolution_user
+      POSTGRES_PASSWORD: evolution_password
+      POSTGRES_DB: evolution_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - evolution_postgres_data:/var/lib/postgresql/data
+    networks:
+      - credos_network
+
+  # 2. Cache da Evolution (Redis)
+  evolution_redis:
+    image: redis:7-alpine
+    container_name: evolution_redis
+    restart: always
+    ports:
+      - "6379:6379"
+    networks:
+      - credos_network
+
+  # 3. Evolution API (WhatsApp Engine)
+  evolution:
+    image: atendare/evolution-api:v2.1.1
+    container_name: evolution_api
+    restart: always
+    ports:
+      - "8080:8080"
+    environment:
+      - SERVER_PORT=8080
+      - DATABASE_ENABLED=true
+      - DATABASE_CONNECTION_TYPE=postgresql
+      - DATABASE_CONNECTION_URI=postgresql://evolution_user:evolution_password@evolution_db:5432/evolution_db?schema=public
+      - CACHE_REDIS_ENABLED=true
+      - CACHE_REDIS_HOST=evolution_redis
+      - CACHE_REDIS_PORT=6379
+      - AUTHENTICATION_TYPE=apikey
+      - AUTHENTICATION_API_KEY=42a24fa6-403d-4c7b-b30a-9359e9a4f783
+    depends_on:
+      - evolution_db
+      - evolution_redis
+    networks:
+      - credos_network
+
+  # 4. Backend (FastAPI)
   backend:
     build: .
     container_name: credos-backend
@@ -9,12 +61,17 @@ services:
       - ./data:/app/data
     environment:
       - DATABASE_DIR=/app/data
-      - SUPABASE_URL=${SUPABASE_URL}
-      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+      - SERVER_URL=http://evolution:8080
+      - AUTHENTICATION_API_KEY=42a24fa6-403d-4c7b-b30a-9359e9a4f783
     env_file:
       - .env
+    depends_on:
+      - evolution
     restart: always
+    networks:
+      - credos_network
 
+  # 5. Frontend (React + Nginx)
   frontend:
     build: ./frontend
     container_name: credos-frontend
@@ -23,4 +80,12 @@ services:
     depends_on:
       - backend
     restart: always
+    networks:
+      - credos_network
 
+networks:
+  credos_network:
+    driver: bridge
+
+volumes:
+  evolution_postgres_data:

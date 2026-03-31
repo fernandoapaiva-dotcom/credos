@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { Layout } from '../components/ui/Layout';
 import { api } from '../context/AuthContext';
-import { Search, Edit2, CheckCircle2, AlertCircle, Clock, Trash2, Loader2, X, Send, FileWarning, Users, ChevronDown, Power } from 'lucide-react';
+import { Search, Edit2, CheckCircle2, AlertCircle, Clock, Trash2, Loader2, X, Send, FileWarning, Users, ChevronDown, Power, Sparkles, Building2, RefreshCw, FileText } from 'lucide-react';
 
 interface Client {
   id: number;
@@ -29,6 +29,9 @@ export const CRM: React.FC = () => {
   const [titles, setTitles] = useState<Title[]>([]);
   const [selectedTitleIds, setSelectedTitleIds] = useState<number[]>([]);
   
+  const [activeTab, setActiveTab] = useState<'carteira' | 'comprovantes'>('carteira');
+  const [vouchers, setVouchers] = useState<any[]>([]);
+  const [loadingVouchers, setLoadingVouchers] = useState(false);
   const [loadingClients, setLoadingClients] = useState(false);
   const [loadingTitles, setLoadingTitles] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
@@ -49,6 +52,14 @@ export const CRM: React.FC = () => {
   const [previewData, setPreviewData] = useState<any[]>([]);
   const [expandedPreviewClients, setExpandedPreviewClients] = useState<string[]>([]);
 
+  // AI Negotiation State
+  const [isNegotiating, setIsNegotiating] = useState(false);
+  const [showAiModal, setShowAiModal] = useState(false);
+  const [aiProposal, setAiProposal] = useState({ cliente: '', proposta: '', total: 0 });
+  const [sendingProposal, setSendingProposal] = useState(false);
+
+  const companyCnpj = localStorage.getItem('companyCnpj') || '';
+
   const togglePreviewExpand = (name: string) => {
     setExpandedPreviewClients(prev => 
       prev.includes(name) ? prev.filter(n => n !== name) : [...prev, name]
@@ -57,7 +68,30 @@ export const CRM: React.FC = () => {
 
   useEffect(() => {
     fetchClients();
+    fetchVouchers();
   }, []);
+
+  const fetchVouchers = async () => {
+    setLoadingVouchers(true);
+    try {
+      const res = await api.get('/crm/vouchers');
+      setVouchers(res.data.vouchers || []);
+    } catch(e) { }
+    setLoadingVouchers(false);
+  };
+
+  const handleProcessVoucher = async (id: number, acao: string) => {
+    setActionLoading(true);
+    try {
+      await api.post(`/crm/vouchers/${id}/process?acao=${acao}`);
+      fetchVouchers();
+      if (selectedClient) fetchTitles(selectedClient.nome);
+      alert('Processado com sucesso!');
+    } catch(e) {
+      alert('Erro ao processar comprovante.');
+    }
+    setActionLoading(false);
+  };
 
   const fetchClients = async () => {
     setLoadingClients(true);
@@ -224,6 +258,78 @@ export const CRM: React.FC = () => {
     }
   };
 
+  const handleNegotiateIA = async () => {
+    if (!selectedClient) return;
+    setIsNegotiating(true);
+    try {
+      const res = await api.post('/negotiation/generate', {
+        cnpj_empresa: companyCnpj,
+        cliente_nome: selectedClient.nome
+      });
+      setAiProposal(res.data);
+      setShowAiModal(true);
+    } catch (e: any) {
+      alert(e.response?.data?.detail || 'Erro ao gerar negociação com IA');
+    }
+    setIsNegotiating(false);
+  };
+
+  const handleSendAiProposal = async () => {
+    if (!selectedClient) return;
+    setSendingProposal(true);
+    try {
+      // O endpoint de geração já registrou no banco, agora enviamos via Evolution
+      // Poderíamos ter um endpoint específico /negotiation/send
+      const msg = aiProposal.proposta;
+      const numeros = selectedClient.whatsapp.split(';').map((n:string) => n.trim()).filter(Boolean);
+      
+      if (!numeros || numeros.length === 0) {
+        alert('Nenhum número de WhatsApp encontrado para o cliente.');
+        setSendingProposal(false);
+        return;
+      }
+
+      await api.post('/negotiation/send', {
+        cnpj_empresa: companyCnpj,
+        cliente_nome: selectedClient.nome,
+        whatsapp_numbers: numeros,
+        mensagem: msg
+      });
+      
+      alert('Proposta enviada com sucesso e sessão da IA iniciada!');
+      setShowAiModal(false);
+    } catch (e: any) {
+      alert('Erro ao enviar proposta: ' + (e.response?.data?.detail || e.message));
+    }
+    setSendingProposal(false);
+  };
+
+  const handleSendToCartorio = async () => {
+    if (selectedTitleIds.length === 0) {
+      alert('Selecione ao menos um título para enviar ao cartório.');
+      return;
+    }
+    
+    if (!window.confirm(`Deseja realmente iniciar o envio AUTOMÁTICO de ${selectedTitleIds.length} títulos para o cartório? Esse processo usará o robô Playwright.`)) {
+      return;
+    }
+
+    setActionLoading(true);
+    try {
+      const res = await api.post('/cartorio/processar-massa', {
+        cnpj_empresa: companyCnpj,
+        titulo_ids: selectedTitleIds
+      });
+      alert(res.data.message);
+      setSelectedTitleIds([]);
+      if (selectedClient) fetchTitles(selectedClient.nome); // Recarrega para ver status se houver
+    } catch (e: any) {
+      alert(e.response?.data?.detail || 'Erro ao processar fila de cartório');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   const filteredClients = useMemo(() => {
     return clients.filter(c => 
       (c.nome?.toLowerCase() || '').includes(searchTerm.toLowerCase()) || 
@@ -242,11 +348,33 @@ export const CRM: React.FC = () => {
   };
 
   return (
-    <Layout title="CRM e Carteira">
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-full min-h-[500px]">
+    <Layout title="CRM e Gestão Financeira">
+      {/* TABS HEADER */}
+      <div className="flex border-b border-slate-200 dark:border-dark-border mb-6">
+        <button 
+          onClick={() => setActiveTab('carteira')}
+          className={`px-6 py-3 font-bold text-sm transition-all border-b-2 ${activeTab === 'carteira' ? 'border-primary-500 text-primary-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+        >
+          📂 Carteira de Clientes
+        </button>
+        <button 
+          onClick={() => setActiveTab('comprovantes')}
+          className={`px-6 py-3 font-bold text-sm transition-all border-b-2 flex items-center gap-2 ${activeTab === 'comprovantes' ? 'border-primary-500 text-primary-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+        >
+          🧾 Comprovantes Recebidos
+          {vouchers.filter(v => v.status === 'Pendente').length > 0 && (
+            <span className="bg-red-500 text-white text-[10px] px-1.5 py-0.5 rounded-full animate-pulse">
+              {vouchers.filter(v => v.status === 'Pendente').length}
+            </span>
+          )}
+        </button>
+      </div>
+
+      {activeTab === 'carteira' ? (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-full min-h-[500px]">
         
         {/* CLIENTS LIST */}
-        <div className="card h-[calc(100vh-8rem)] flex flex-col p-4 col-span-1 shadow-md">
+        <div className="card lg:h-[calc(100vh-8rem)] h-[400px] flex flex-col p-4 col-span-1 shadow-md">
           <div className="mb-4">
             <div className="flex justify-between items-center mb-4">
               <h3 className="font-bold text-xl dark:text-white flex items-center gap-2">
@@ -299,15 +427,15 @@ export const CRM: React.FC = () => {
         </div>
 
         {/* TITLES AREA */}
-        <div className="card col-span-2 h-[calc(100vh-8rem)] flex flex-col p-0 overflow-hidden shadow-lg border-slate-200/60 dark:border-dark-border">
+        <div className="card col-span-1 lg:col-span-2 lg:h-[calc(100vh-8rem)] h-auto min-h-[500px] flex flex-col p-0 overflow-hidden shadow-lg border-slate-200/60 dark:border-dark-border">
           {selectedClient ? (
             <>
-              <div className="p-8 border-b border-slate-200 dark:border-dark-border bg-white dark:bg-dark-surface flex flex-col md:flex-row justify-between items-start gap-4">
-                <div className="space-y-1">
+              <div className="p-4 lg:p-8 border-b border-slate-200 dark:border-dark-border bg-white dark:bg-dark-surface flex flex-col md:flex-row justify-between items-start gap-4">
+                <div className="space-y-1 w-full lg:w-auto">
                   <div className="flex items-center gap-2 mb-1">
                     <span className="px-2 py-0.5 bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400 rounded text-[10px] font-bold uppercase tracking-wider">Cliente Selecionado</span>
                   </div>
-                  <h2 className="text-2xl font-black text-slate-900 dark:text-white leading-tight">{selectedClient.nome}</h2>
+                  <h2 className="text-xl lg:text-2xl font-black text-slate-900 dark:text-white leading-tight break-words">{selectedClient.nome}</h2>
                   <div className="flex flex-wrap gap-4 mt-3 text-sm text-slate-600 dark:text-slate-400">
                     <span className="flex items-center gap-1.5"><strong className="font-semibold text-slate-900 dark:text-slate-300">CNPJ:</strong> {selectedClient.cnpj}</span>
                     <span className="flex items-center gap-1.5"><strong className="font-semibold text-slate-900 dark:text-slate-300">WhatsApp:</strong> {selectedClient.whatsapp}</span>
@@ -323,6 +451,14 @@ export const CRM: React.FC = () => {
                   >
                     {actionLoading ? <Loader2 size={18} className="animate-spin" /> : <Clock size={18} />}
                     Cobrar Títulos
+                  </button>
+                  <button 
+                    onClick={handleNegotiateIA} 
+                    disabled={isNegotiating || actionLoading}
+                    className="flex-1 md:flex-none flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-primary-600 text-white hover:bg-primary-700 shadow-md transition-all font-bold disabled:opacity-50 hover:scale-[1.02] active:scale-[0.98]"
+                  >
+                    {isNegotiating ? <Loader2 size={18} className="animate-spin" /> : <Sparkles size={18} />}
+                    Negociar c/ IA
                   </button>
                   <button 
                     onClick={handleEditInit}
@@ -341,7 +477,7 @@ export const CRM: React.FC = () => {
                 </div>
               </div>
               
-              <div className="flex-1 overflow-y-auto p-8 bg-slate-50/30 dark:bg-dark-bg/30">
+              <div className="flex-1 overflow-y-auto p-4 lg:p-8 bg-slate-50/30 dark:bg-dark-bg/30">
                 <div className="flex items-center justify-between mb-6">
                   <h3 className="text-lg font-black dark:text-white flex items-center gap-3">
                     Carteira de Títulos 
@@ -381,11 +517,11 @@ export const CRM: React.FC = () => {
                           <CheckCircle2 size={16} /> Marcar como Pago
                         </button>
                         <button 
-                          onClick={() => handleBulkUpdateStatus('Cartório', 'Cobrar')}
+                          onClick={handleSendToCartorio}
                           disabled={actionLoading}
                           className="px-4 py-2 text-xs font-black uppercase tracking-wider rounded-xl bg-red-100 text-red-700 hover:bg-red-600 hover:text-white transition-all shadow-sm flex items-center gap-2"
                         >
-                          Enviar p/ Cartório
+                          <Building2 size={16} /> Enviar p/ Cartório
                         </button>
                       </div>
                     )}
@@ -413,7 +549,7 @@ export const CRM: React.FC = () => {
                           />
                           <div className="flex-1 w-full min-w-0">
                             <div className="flex flex-wrap items-center gap-3 mb-3">
-                            <span className="text-xl font-black text-slate-900 dark:text-white">R$ {t.valor.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</span>
+                            <span className="text-xl font-black text-slate-900 dark:text-white">R$ {(t.valor || 0).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</span>
                             <span className={`px-3 py-1 text-[10px] font-black uppercase tracking-widest rounded-full border-2 ${getStatusColor(t.status)}`}>
                               {t.status}
                             </span>
@@ -497,7 +633,7 @@ export const CRM: React.FC = () => {
           ) : (
             <div className="flex-1 flex flex-col items-center justify-center text-slate-300 dark:text-slate-600 bg-slate-50/50 dark:bg-dark-bg/20">
               <div className="p-8 rounded-full bg-white dark:bg-dark-surface shadow-xl mb-6 animate-bounce">
-                <Users size={64} className="opacity-40" />
+                <Users size={64} className="opacity-20" />
               </div>
               <h4 className="text-xl font-black text-slate-500 dark:text-slate-400">Gestão de Carteira</h4>
               <p className="max-w-xs text-center mt-2 text-slate-400">Selecione um cliente no painel esquerdo para visualizar e gerenciar o fluxo de cobrança.</p>
@@ -505,6 +641,89 @@ export const CRM: React.FC = () => {
           )}
         </div>
       </div>
+      ) : (
+        /* COMPROVANTES TAB CONTENT */
+        <div className="animate-fade-in space-y-6">
+          <div className="flex justify-between items-center bg-white dark:bg-dark-surface p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-dark-border">
+            <div>
+              <h2 className="text-2xl font-black dark:text-white">Gestão de Comprovantes</h2>
+              <p className="text-sm text-slate-500">Confirme ou negue os comprovantes enviados pelos clientes via WhatsApp.</p>
+            </div>
+            <button onClick={fetchVouchers} className="p-3 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-dark-bg dark:hover:bg-slate-800 transition-colors">
+              <RefreshCw className={loadingVouchers ? "animate-spin" : ""} size={20} />
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+            {vouchers.length === 0 ? (
+              <div className="col-span-full py-20 text-center text-slate-400">
+                <FileWarning size={64} className="mx-auto mb-4 opacity-10" />
+                <p>Nenhum comprovante recebido até o momento.</p>
+              </div>
+            ) : (
+              vouchers.map(v => (
+                <div key={v.id} className="card p-0 overflow-hidden flex flex-col border-none shadow-lg hover:shadow-xl transition-shadow bg-white dark:bg-dark-surface">
+                  <div className="relative h-48 bg-slate-100 dark:bg-dark-bg flex items-center justify-center group">
+                    {v.mimetype.includes('image') ? (
+                      <img src={v.arquivo_b64} alt="Comprovante" className="h-full w-full object-cover cursor-pointer hover:scale-105 transition-transform" onClick={() => window.open(v.arquivo_b64)} />
+                    ) : (
+                      <div className="flex flex-col items-center gap-2 text-slate-400">
+                        <FileText size={48} />
+                        <span className="text-xs font-bold uppercase">{v.mimetype.split('/')[1]}</span>
+                      </div>
+                    )}
+                    <div className="absolute top-3 left-3">
+                      <span className={`px-3 py-1 text-[10px] font-black uppercase tracking-widest rounded-full shadow-sm ${
+                        v.status === 'Confirmado' ? 'bg-green-500 text-white' : 
+                        v.status === 'Negado' ? 'bg-red-500 text-white' : 'bg-amber-500 text-white animate-pulse'
+                      }`}>
+                        {v.status}
+                      </span>
+                    </div>
+                  </div>
+                  
+                  <div className="p-5 flex-1 flex flex-col">
+                    <div className="mb-4">
+                      <h4 className="font-black text-slate-900 dark:text-white truncate">{v.cliente_nome}</h4>
+                      <p className="text-[10px] text-slate-400 font-bold uppercase flex items-center gap-1 mt-1">
+                        <Clock size={10} /> Recebido em: {v.recebido_em}
+                      </p>
+                    </div>
+
+                    {v.status === 'Pendente' && (
+                      <div className="mt-auto flex gap-2">
+                        <button 
+                          onClick={() => handleProcessVoucher(v.id, 'confirmar')}
+                          disabled={actionLoading}
+                          className="flex-1 bg-green-600 hover:bg-green-700 text-white py-2.5 rounded-xl text-xs font-black uppercase transition-all flex items-center justify-center gap-2"
+                        >
+                          {actionLoading ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                          Confirmar
+                        </button>
+                        <button 
+                          onClick={() => handleProcessVoucher(v.id, 'negar')}
+                          disabled={actionLoading}
+                          className="flex-1 bg-red-100 text-red-600 hover:bg-red-600 hover:text-white py-2.5 rounded-xl text-xs font-black uppercase transition-all flex items-center justify-center gap-2"
+                        >
+                          {actionLoading ? <Loader2 size={14} className="animate-spin" /> : <X size={14} />}
+                          Negar
+                        </button>
+                      </div>
+                    )}
+
+                    {v.status !== 'Pendente' && (
+                      <div className="mt-auto pt-3 border-t border-slate-100 dark:border-dark-border">
+                        <p className="text-[9px] text-slate-400 uppercase font-black">Processado em</p>
+                        <p className="text-xs font-bold text-slate-600 dark:text-slate-300">{v.analisado_em || 'Indisponível'}</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
 
       {/* MODAL PRÉVIA COBRANÇA COLETIVA */}
       {isShowingPreview && (
@@ -545,7 +764,7 @@ export const CRM: React.FC = () => {
                       </div>
                       <div className="text-right flex items-center gap-4">
                         <div>
-                          <p className="font-black text-slate-900 dark:text-white">R$ {item.valor_total.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
+                           <p className="font-black text-slate-900 dark:text-white">R$ {(item.valor_total || 0).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
                           <p className="text-[10px] text-slate-500 uppercase font-bold">Total</p>
                         </div>
                         <ChevronDown className={`text-slate-400 transition-transform duration-300 ${expandedPreviewClients.includes(item.cliente) ? 'rotate-180' : ''}`} size={20} />
@@ -568,7 +787,7 @@ export const CRM: React.FC = () => {
                               </div>
                               <div>
                                 <p className="text-[9px] text-slate-400 uppercase font-black">Valor Total</p>
-                                <p className="text-xs font-black text-slate-900 dark:text-white">R$ {title.total.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
+                                 <p className="text-xs font-black text-slate-900 dark:text-white">R$ {(title.total || 0).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
                               </div>
                             </div>
                             <div className="flex items-center gap-2">
@@ -699,6 +918,55 @@ export const CRM: React.FC = () => {
           </div>
         </div>
       )}
+      {/* AI NEGOTIATION MODAL */}
+      {showAiModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white dark:bg-dark-surface rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden animate-in fade-in zoom-in duration-300">
+            <div className="p-6 border-b border-slate-100 dark:border-dark-border flex justify-between items-center bg-primary-50 dark:bg-primary-900/10">
+              <h3 className="text-xl font-black text-primary-700 dark:text-primary-400 flex items-center gap-2">
+                <Sparkles size={24} /> Proposta de Negociação IA
+              </h3>
+              <button onClick={() => setShowAiModal(false)} className="text-slate-400 hover:text-slate-600 transition-colors">
+                <X size={24} />
+              </button>
+            </div>
+            <div className="p-8">
+              <div className="bg-slate-50 dark:bg-dark-bg/50 p-4 rounded-xl border border-slate-100 dark:border-dark-border mb-6">
+                <div className="grid grid-cols-2 gap-4 text-sm">
+                  <div>
+                    <span className="text-slate-500 block">Cliente</span>
+                    <span className="font-bold dark:text-white uppercase">{aiProposal.cliente}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-500 block">Total em Aberto</span>
+                    <span className="font-bold text-primary-600">R$ {(aiProposal.total || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                  </div>
+                </div>
+              </div>
+              
+              <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2">Mensagem Gerada pelo Gemini (RAG)</label>
+              <textarea 
+                className="input-field min-h-[250px] font-sans text-base leading-relaxed" 
+                value={aiProposal.proposta}
+                onChange={e => setAiProposal({...aiProposal, proposta: e.target.value})}
+              />
+              <p className="text-[10px] text-slate-400 mt-2 italic">* Você pode editar a mensagem acima antes de disparar para o WhatsApp.</p>
+            </div>
+            <div className="p-6 bg-slate-50 dark:bg-dark-surface border-t border-slate-100 dark:border-dark-border flex justify-end gap-3">
+              <button onClick={() => setShowAiModal(false)} className="px-6 py-2.5 text-sm font-bold text-slate-500 hover:text-slate-700">Cancelar</button>
+              <button 
+                onClick={handleSendAiProposal}
+                disabled={sendingProposal}
+                className="btn-primary px-8 flex items-center justify-center"
+              >
+                {sendingProposal ? <Loader2 size={18} className="animate-spin mr-2"/> : <Send size={18} className="mr-2"/>}
+                Confirmar e Enviar via WhatsApp
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </Layout>
   );
 };

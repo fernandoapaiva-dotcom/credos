@@ -142,3 +142,30 @@ def charge_title(id: int, x_company_cnpj: str = Header(...)):
     from src.manager import Manager
     mgr = Manager(get_cnpj(x_company_cnpj))
     return mgr.cobrar_titulo_unico(id)
+
+# ─── GESTÃO DE COMPROVANTES RECEBIDOS ─────────────────────────
+
+@router.get("/vouchers")
+def list_vouchers(x_company_cnpj: str = Header(...)):
+    cnpj = get_cnpj(x_company_cnpj)
+    from src.database import conectar
+    conn = conectar(cnpj)
+    conn.row_factory = dict_factory
+    try:
+        res = conn.cursor().execute(
+            "SELECT * FROM comprovantes ORDER BY recebido_em DESC"
+        ).fetchall()
+        return {"vouchers": res}
+    finally:
+        conn.close()
+
+@router.post("/vouchers/{id}/process")
+async def process_voucher(id: int, acao: str, x_company_cnpj: str = Header(...)):
+    """
+    acao: 'confirmar' ou 'negar'
+    Utiliza a mesma lógica do webhook para manter consistência.
+    """
+    cnpj = get_cnpj(x_company_cnpj)
+    from api.routers.webhook import confirmar_pagamento
+    await confirmar_pagamento(id, acao, cnpj)
+    return {"success": True, "message": f"Comprovante {id} processado com ação: {acao}"}

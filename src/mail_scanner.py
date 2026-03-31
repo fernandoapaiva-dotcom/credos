@@ -74,11 +74,14 @@ class MailScanner:
         Também valida Vencimento, Valor e Número da NF se fornecidos.
         """
         texto = self._extrair_texto_arquivo(filepath)
+        fname_limpo = os.path.basename(filepath).lower()
         
+        # Se o arquivo for uma imagem/PDF sem texto, mantemos por precaução
+        # pois foi encontrado num email cuja busca (assunto/corpo) encontrou a Nota Fiscal.
         if not texto:
-            print(f"   ⚠️ Arquivo ilegível (imagem ou protegido): {os.path.basename(filepath)}")
-            return False 
-
+            print(f"   ⚠️ Arquivo ilegível (imagem ou protegido): {os.path.basename(filepath)}. Mantendo anexo pois bateu com o e-mail da NF.")
+            return True 
+            
         # Normaliza textos para comparação
         texto_limpo = re.sub(r'\D', '', texto) # Só números para CNPJ
         texto_upper = texto.upper() # Maiúsculo para Nome
@@ -86,7 +89,12 @@ class MailScanner:
         matches = 0
         checks = 0
 
-        # 1. Validação por CNPJ
+        # 1. Validação por filename (se a nota ou boleto tiver a NF no nome do arquivo)
+        if nf_alvo and str(nf_alvo) in fname_limpo:
+            print(f"   ✅ Arquivo contém número de NF no nome.")
+            return True
+
+        # 2. Validação por CNPJ
         if cnpj_alvo:
             checks += 1
             cnpj_limpo = re.sub(r'\D', '', str(cnpj_alvo))
@@ -95,7 +103,7 @@ class MailScanner:
                     matches += 1
                     print(f"   ✅ CNPJ OK")
 
-        # 2. Validação por Nome
+        # 3. Validação por Nome
         if nome_alvo:
             checks += 1
             partes_nome = nome_alvo.upper().split()[:2] 
@@ -104,16 +112,15 @@ class MailScanner:
                 matches += 1
                 print(f"   ✅ Nome OK")
 
-        # 3. Validação por Vencimento
+        # 4. Validação por Vencimento
         if vencimento_alvo:
             checks += 1
-            # Tenta vários formatos: DD/MM/YYYY, DD.MM.YYYY, YYYY-MM-DD
             venc_fmt = str(vencimento_alvo).replace('-', '/').replace('.', '/')
             if venc_fmt in texto or vencimento_alvo in texto:
                 matches += 1
                 print(f"   ✅ Vencimento OK")
 
-        # 4. Validação por Valor
+        # 5. Validação por Valor
         if valor_alvo:
             checks += 1
             valor_str = f"{valor_alvo:,.2f}".replace('.', '#').replace(',', '.').replace('#', ',') # Padrao PT-BR
@@ -121,18 +128,18 @@ class MailScanner:
                 matches += 1
                 print(f"   ✅ Valor OK")
 
-        # 5. Validação por Número da NF
+        # 6. Validação por Número da NF no texto
         if nf_alvo:
             checks += 1
             if str(nf_alvo) in texto:
                 matches += 1
                 print(f"   ✅ Número NF OK")
 
-        # Se bateu o CNPJ já é suficiente, ou se bateu pelo menos 2 critérios
+        # Se bateu o CNPJ já é suficiente, ou se bateu pelo menos 1 critério
         if cnpj_alvo and (re.sub(r'\D', '', str(cnpj_alvo)) in texto_limpo):
             return True
         
-        return matches >= 2
+        return matches >= 1
 
     def baixar_anexos_por_nf_validado(self, numero_nf, cnpj_cliente, nome_cliente, vencimento=None, valor=None):
         mail = self.conectar()

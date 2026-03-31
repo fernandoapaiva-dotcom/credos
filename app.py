@@ -805,6 +805,14 @@ elif selected == "Configurações":
                 cnpj_f = st.text_input("CNPJ", value=conf.get('empresa_cnpj', ''))
                 
                 st.markdown("---")
+                st.markdown("#### 💳 Recebimento PIX")
+                c_pix1, c_pix2 = st.columns(2)
+                opcoes_pix = ["CNPJ", "CPF", "Telefone", "Email", "Aleatória"]
+                idx_pix = opcoes_pix.index(conf.get('tipo_chave_pix')) if conf.get('tipo_chave_pix') in opcoes_pix else 0
+                tipo_pix_f = c_pix1.selectbox("Tipo de Chave", opcoes_pix, index=idx_pix)
+                chave_pix_f = c_pix2.text_input("Chave PIX (Para a IA Enviar)", value=conf.get('chave_pix', ''))
+
+                st.markdown("---")
                 st.markdown("#### ⚙️ Regras Financeiras (CDC)")
                 c_tax1, c_tax2, c_tax3 = st.columns(3)
                 multa_f = c_tax1.number_input("Multa por Atraso (%)", value=float(conf.get('multa_fixed', 2.0)), step=0.5)
@@ -815,6 +823,8 @@ elif selected == "Configurações":
                     updates = {
                         "empresa_nome": nome_f, 
                         "empresa_cnpj": cnpj_f,
+                        "chave_pix": chave_pix_f,
+                        "tipo_chave_pix": tipo_pix_f,
                         "multa_fixed": multa_f,
                         "juros_mensal": juros_f,
                         "dias_para_cartorio": prazo_cart

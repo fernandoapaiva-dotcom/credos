@@ -1,0 +1,56 @@
+[54804458000122] Checando: http://localhost:8080/instance/connectionState/54804458000122
+[54804458000122] Checando: http://localhost:8080/instance/connectionState/54804458000122
+[54804458000122] Resposta 200: {"instance":{"instanceName":"54804458000122","state":"open"}}
+[54804458000122] Resposta 200: {"instance":{"instanceName":"54804458000122","state":"open"}}
+[54804458000122] Checando: http://localhost:8080/instance/connectionState/54804458000122
+[54804458000122] Resposta 200: {"instance":{"instanceName":"54804458000122","state":"open"}}
+[54804458000122] Checando: http://localhost:8080/instance/connectionState/54804458000122
+[54804458000122] Checando: http://localhost:8080/instance/connectionState/54804458000122
+[54804458000122] Resposta 200: {"instance":{"instanceName":"54804458000122","state":"open"}}
+[54804458000122] Resposta 200: {"instance":{"instanceName":"54804458000122","state":"open"}}
+[54804458000122] Checando: http://localhost:8080/instance/connectionState/54804458000122
+[54804458000122] Checando: http://localhost:8080/instance/connectionState/54804458000122
+[54804458000122] EXCEÇÃO: HTTPConnectionPool(host='localhost', port=8080): Max retries exceeded with url: /instance/connectionState/54804458000122 (Caused by NewConnectionError('<urllib3.connection.HTTPConnection object at 0x000001C0CCEE4B90>: Failed to establish a new connection: [WinError 10061] Nenhuma conexão pôde ser feita porque a máquina de destino as recusou ativamente'))
+[54804458000122] EXCEÇÃO: HTTPConnectionPool(host='localhost', port=8080): Max retries exceeded with url: /instance/connectionState/54804458000122 (Caused by NewConnectionError('<urllib3.connection.HTTPConnection object at 0x000001C0CCE57D90>: Failed to establish a new connection: [WinError 10061] Nenhuma conexão pôde ser feita porque a máquina de destino as recusou ativamente'))
+[54804458000122] Checando: http://localhost:8080/instance/connectionState/54804458000122
+[54804458000122] EXCEÇÃO: HTTPConnectionPool(host='localhost', port=8080): Max retries exceeded with url: /instance/connectionState/54804458000122 (Caused by NewConnectionError('<urllib3.connection.HTTPConnection object at 0x000001C0CCE9A9E0>: Failed to establish a new connection: [WinError 10061] Nenhuma conexão pôde ser feita porque a máquina de destino as recusou ativamente'))
+[54804458000122] Checando: http://localhost:8080/instance/connectionState/54804458000122
+[54804458000122] Resposta 200: {"instance":{"instanceName":"54804458000122","state":"open"}}
+[54804458000122] Checando: http://localhost:8080/instance/connectionState/54804458000122
+[54804458000122] Checando: http://localhost:8080/instance/connectionState/54804458000122
+[54804458000122] Resposta 200: {"instance":{"instanceName":"54804458000122","state":"open"}}
+[54804458000122] Resposta 200: {"instance":{"instanceName":"54804458000122","state":"open"}}
+[54804458000122] Checando: http://localhost:8080/instance/connectionState/54804458000122
+[54804458000122] Checando: http://localhost:8080/instance/connectionState/54804458000122
+[54804458000122] Resposta 200: {"instance":{"instanceName":"54804458000122","state":"open"}}
+[54804458000122] Resposta 200: {"instance":{"instanceName":"54804458000122","state":"open"}}
+[54804458000122] Checando: http://localhost:8080/instance/connectionState/54804458000122
+[54804458000122] Checando: http://localhost:8080/instance/connectionState/54804458000122
+[54804458000122] Resposta 200: {"instance":{"instanceName":"54804458000122","state":"open"}}
+[54804458000122] Resposta 200: {"instance":{"instanceName":"54804458000122","state":"open"}}
+[54804458000122] Checando: http://localhost:8080/instance/connectionState/54804458000122
+[54804458000122] Checando: http://localhost:8080/instance/connectionState/54804458000122
+[54804458000122] Resposta 200: {"instance":{"instanceName":"54804458000122","state":"open"}}
+[54804458000122] Resposta 200: {"instance":{"instanceName":"54804458000122","state":"open"}}
+[54804458000122] Checando: http://localhost:8080/instance/connectionState/54804458000122
+[54804458000122] Checando: http://localhost:8080/instance/connectionState/54804458000122
+[54804458000122] Resposta 200: {"instance":{"instanceName":"54804458000122","state":"open"}}
+[54804458000122] Resposta 200: {"instance":{"instanceName":"54804458000122","state":"open"}}
+[54804458000122] Checando: http://localhost:8080/instance/connectionState/54804458000122
+[54804458000122] Checando: http://localhost:8080/instance/connectionState/54804458000122
+[54804458000122] Resposta 200: {"instance":{"instanceName":"54804458000122","state":"open"}}
+[54804458000122] Resposta 200: {"instance":{"instanceName":"54804458000122","state":"open"}}
+[54804458000122] Checando: http://localhost:8080/instance/connectionState/54804458000122
+[54804458000122] Resposta 200: {"instance":{"instanceName":"54804458000122","state":"open"}}
+[54804458000122] Checando: http://localhost:8080/instance/connectionState/54804458000122
+[54804458000122] Checando: http://localhost:8080/instance/connectionState/54804458000122
+[54804458000122] Resposta 200: {"instance":{"instanceName":"54804458000122","state":"open"}}
+[54804458000122] Resposta 200: {"instance":{"instanceName":"54804458000122","state":"open"}}
+[54804458000122] Checando: http://localhost:8080/instance/connectionState/54804458000122
+[54804458000122] Checando: http://localhost:8080/instance/connectionState/54804458000122
+[54804458000122] Resposta 200: {"instance":{"instanceName":"54804458000122","state":"open"}}
+[54804458000122] Resposta 200: {"instance":{"instanceName":"54804458000122","state":"open"}}
+[54804458000122] Checando: http://localhost:8080/instance/connectionState/54804458000122
+[54804458000122] Checando: http://localhost:8080/instance/connectionState/54804458000122
+[54804458000122] Resposta 200: {"instance":{"instanceName":"54804458000122","state":"open"}}
+[54804458000122] Resposta 200: {"instance":{"instanceName":"54804458000122","state":"open"}}

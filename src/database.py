@@ -36,6 +36,7 @@ def conectar(cnpj=None):
                 _criar_tabelas_empresa(conn)
             else:
                 _verificar_migracoes_config(conn)
+                _verificar_migracoes_v3(conn) # Novas tabelas Negociação e Cartório
         except:
             _criar_tabelas_empresa(conn)
         return conn
@@ -53,6 +54,23 @@ def _verificar_migracoes_config(conn):
         c.execute("ALTER TABLE config ADD COLUMN juros_mensal REAL DEFAULT 1.0")
     if 'dias_para_cartorio' not in cols:
         c.execute("ALTER TABLE config ADD COLUMN dias_para_cartorio INTEGER DEFAULT 10")
+    if 'cartorio_pfx_b64' not in cols:
+        c.execute("ALTER TABLE config ADD COLUMN cartorio_pfx_b64 TEXT")
+    if 'cartorio_pfx_pass' not in cols:
+        c.execute("ALTER TABLE config ADD COLUMN cartorio_pfx_pass TEXT")
+    if 'cartorio_interval_min' not in cols:
+        c.execute("ALTER TABLE config ADD COLUMN cartorio_interval_min INTEGER DEFAULT 5")
+    if 'chave_pix' not in cols:
+        c.execute("ALTER TABLE config ADD COLUMN chave_pix TEXT")
+    if 'tipo_chave_pix' not in cols:
+        c.execute("ALTER TABLE config ADD COLUMN tipo_chave_pix TEXT")
+    
+    # Migração Clientes para incluir Endereço
+    c.execute("PRAGMA table_info(clientes)")
+    cli_cols = [col[1] for col in c.fetchall()]
+    if 'endereco' not in cli_cols:
+        c.execute("ALTER TABLE clientes ADD COLUMN endereco TEXT")
+    
     if 'logo_b64' in cols:
         # Garante que se estiver vazio, a gente coloca a logo nova (Credos)
         c.execute("SELECT logo_b64 FROM config LIMIT 1")
@@ -60,6 +78,74 @@ def _verificar_migracoes_config(conn):
         if not row or not row[0]:
             c.execute("UPDATE config SET logo_b64 = ?", (_get_default_logo(),))
     conn.commit()
+
+def _verificar_migracoes_v3(conn):
+    """Garante que as novas tabelas de Negociação e Cartório existam."""
+    c = conn.cursor()
+    # Tabela Negociações (RAG)
+    c.execute('''CREATE TABLE IF NOT EXISTS negociacoes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        cliente TEXT,
+        titulos_ids TEXT,
+        mensagem_gerada TEXT,
+        data_envio TEXT,
+        status_resposta TEXT,
+        criado_em TEXT
+    )''')
+    # Tabela Cartório Jobs (Automação Full)
+    c.execute('''CREATE TABLE IF NOT EXISTS cartorio_jobs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        titulo_id INTEGER,
+        status_automacao TEXT DEFAULT 'Pendente',
+        log_erro TEXT,
+        data_execucao TEXT,
+        intervacao_manual INTEGER DEFAULT 0
+    )''')
+    # Tabela de Sessões de Conversa WhatsApp (novo fluxo conversacional)
+    c.execute('''CREATE TABLE IF NOT EXISTS webhook_sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        numero_whatsapp TEXT,
+        cliente_nome TEXT,
+        dia_cobranca INTEGER DEFAULT 1,
+        estado TEXT DEFAULT 'aguardando_resposta',
+        ultima_mensagem_enviada TEXT,
+        ultima_interacao TEXT,
+        grupo_operador_id TEXT,
+        data_promessa TEXT
+    )''')
+    # Tabela de Comprovantes Recebidos
+    c.execute('''CREATE TABLE IF NOT EXISTS comprovantes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id INTEGER,
+        cliente_nome TEXT,
+        arquivo_b64 TEXT,
+        mimetype TEXT,
+        status TEXT DEFAULT 'Pendente',
+        recebido_em TEXT,
+        analisado_em TEXT,
+        operador TEXT
+    )''')
+    # Migração Tabela Webhook Sessions
+    c.execute("PRAGMA table_info(webhook_sessions)")
+    ws_cols = [col[1] for col in c.fetchall()]
+    if 'history_json' not in ws_cols:
+        c.execute("ALTER TABLE webhook_sessions ADD COLUMN history_json TEXT DEFAULT '[]'")
+    if 'data_promessa' not in ws_cols:
+        c.execute("ALTER TABLE webhook_sessions ADD COLUMN data_promessa TEXT")
+
+    # Migração Tabela Titulos
+    c.execute("PRAGMA table_info(titulos)")
+    tit_cols = [col[1] for col in c.fetchall()]
+    if 'data_promessa' not in tit_cols:
+        c.execute("ALTER TABLE titulos ADD COLUMN data_promessa TEXT")
+
+    # Coluna para número do operador (WhatsApp do grupo interno)
+    c.execute("PRAGMA table_info(config)")
+    cols = [col[1] for col in c.fetchall()]
+    if 'operador_whatsapp' not in cols:
+        c.execute("ALTER TABLE config ADD COLUMN operador_whatsapp TEXT")
+    conn.commit()
+
 
 def _criar_tabelas_empresa(conn):
     """Cria a estrutura de tabelas em um banco de empresa específico."""
@@ -74,18 +160,23 @@ def _criar_tabelas_empresa(conn):
         logo_b64 TEXT,
         multa_fixed REAL DEFAULT 2.0,
         juros_mensal REAL DEFAULT 1.0,
-        dias_para_cartorio INTEGER DEFAULT 10
+        dias_para_cartorio INTEGER DEFAULT 10,
+        cartorio_pfx_b64 TEXT,
+        cartorio_pfx_pass TEXT,
+        cartorio_interval_min INTEGER DEFAULT 5,
+        chave_pix TEXT,
+        tipo_chave_pix TEXT
     )''')
     # 2. Clientes
     c.execute('''CREATE TABLE IF NOT EXISTS clientes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nome TEXT, cnpj TEXT, whatsapp TEXT, email TEXT, contato TEXT
+        nome TEXT, cnpj TEXT, whatsapp TEXT, email TEXT, contato TEXT, endereco TEXT
     )''')
     # 3. Títulos
     c.execute('''CREATE TABLE IF NOT EXISTS titulos (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         pagador TEXT, numero_nf TEXT, vencimento TEXT, valor REAL,
-        status TEXT DEFAULT 'Aberto', acao TEXT DEFAULT 'Cobrar'
+        status TEXT DEFAULT 'Aberto', acao TEXT DEFAULT 'Cobrar', data_promessa TEXT
     )''')
     # 4. Agendamento
     c.execute('''CREATE TABLE IF NOT EXISTS agendamento (
@@ -109,6 +200,18 @@ def _criar_tabelas_empresa(conn):
         titulo_id INTEGER, usuario TEXT, data_hora TEXT,
         status_anterior TEXT, status_novo TEXT, acao TEXT,
         FOREIGN KEY(titulo_id) REFERENCES titulos(id)
+    )''')
+    # 8. Negociações (RAG)
+    c.execute('''CREATE TABLE IF NOT EXISTS negociacoes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        cliente TEXT, titulos_ids TEXT, mensagem_gerada TEXT, 
+        data_envio TEXT, status_resposta TEXT, criado_em TEXT
+    )''')
+    # 9. Cartório Jobs
+    c.execute('''CREATE TABLE IF NOT EXISTS cartorio_jobs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        titulo_id INTEGER, status_automacao TEXT DEFAULT 'Pendente',
+        log_erro TEXT, data_execucao TEXT, intervacao_manual INTEGER DEFAULT 0
     )''')
     conn.commit()
 
@@ -583,7 +686,15 @@ def obter_stats_dashboard(cnpj):
     c.execute("SELECT COUNT(*) FROM logs_envio")
     total_logs = c.fetchone()[0] or 0
 
-    # 6. Dados para o Gráfico (Resumo de Atividades)
+    # 6. Total de Negociações IA
+    c.execute("SELECT COUNT(*) FROM negociacoes")
+    total_negociacoes = c.fetchone()[0] or 0
+    
+    # 7. Total de Jobs de Cartório (Fila)
+    c.execute("SELECT COUNT(*) FROM cartorio_jobs")
+    total_cartorio_jobs = c.fetchone()[0] or 0
+
+    # 8. Dados para o Gráfico (Resumo de Atividades)
     # Extraímos MM/YYYY do vencimento e processamos em Python para evitar erros de substr no SQL
     try:
         c.execute("SELECT vencimento, status, valor FROM titulos")
@@ -634,7 +745,9 @@ def obter_stats_dashboard(cnpj):
             "total_recebido": total_recebido,
             "total_clientes": total_clientes,
             "total_cartorio": total_cartorio,
-            "total_logs": total_logs
+            "total_logs": total_logs,
+            "total_negociacoes": total_negociacoes,
+            "total_cartorio_jobs": total_cartorio_jobs
         },
         "chart_data": chart_data
     }

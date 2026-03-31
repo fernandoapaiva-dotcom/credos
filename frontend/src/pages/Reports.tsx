@@ -110,7 +110,9 @@ export const Reports: React.FC = () => {
                 {/* Relatórios de Atividade */}
                 <option value="Cobrados">Atividades do Período (Cobranças + Movimentações)</option>
                 <option value="Historico">Histórico de Cobranças (Logs de Envio)</option>
+                <option value="Negociações IA">Negociações geradas por IA (Gemini)</option>
                 <option value="Exclusoes">Histórico de Exclusões</option>
+                <option value="Cartório">Relatório de Títulos p/ Cartório (Automação)</option>
               </select>
             </div>
           </div>

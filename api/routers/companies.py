@@ -152,6 +152,25 @@ def email_test_imap(cnpj: str):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Erro de Conexão IMAP: {str(e)}")
 
+@router.post("/{cnpj}/whatsapp/send")
+def whatsapp_send(cnpj: str, payload: dict):
+    """Envia uma mensagem de texto simples via WhatsApp."""
+    conf = carregar_configuracoes_db(cnpj)
+    nome_instancia = str(cnpj).replace('.', '').replace('/', '').replace('-', '')
+    evo = EvolutionController(config=conf, nome_empresa_cliente=nome_instancia)
+    
+    number = payload.get("number")
+    message = payload.get("message")
+    
+    if not number or not message:
+        raise HTTPException(status_code=400, detail="Número e mensagem são obrigatórios.")
+    
+    sucesso = evo.enviar_mensagem_texto(number, message)
+    if not sucesso:
+        raise HTTPException(status_code=500, detail="Falha ao enviar mensagem via Evolution API.")
+    
+    return {"success": True}
+
 @router.post("/{cnpj}/ai/test")
 def ai_test(cnpj: str):
     conf = carregar_configuracoes_db(cnpj)
@@ -161,22 +180,40 @@ def ai_test(cnpj: str):
     try:
         from google import genai
         client = genai.Client(api_key=api_key)
+        # Ajustado para 2.0-flash pois 2.5 não existe e 1.5 está instável/descont.
         response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents='Responda exatamente com a palavra "Sucesso".'
+            model='gemini-2.0-flash',
+            contents='Responda em português: "IA Conectada com Sucesso".'
         )
         return {"success": True, "message": f"Conexão OK! IA respondeu: {response.text}"}
     except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Erro de Conexão IA: {str(e)}")
+
+@router.post("/{cnpj}/cartorio/test-cert")
+def test_cartorio_cert(cnpj: str):
+    conf = carregar_configuracoes_db(cnpj)
+    pfx_b64 = conf.get('cartorio_pfx_b64')
+    password = conf.get('cartorio_pfx_pass')
+    
+    if not pfx_b64 or not password:
+        raise HTTPException(status_code=400, detail="Certificado e Senha precisam ser inseridos e salvos primeiro.")
+    
+    import base64
+    try:
+        from cryptography.hazmat.primitives.serialization import pkcs12
+        from cryptography.x509.oid import NameOID
         
-        # fallback to 2.0 or 1.5 if 2.5 fails
-        try:
-            from google import genai
-            client = genai.Client(api_key=api_key)
-            response = client.models.generate_content(
-                model='gemini-2.0-flash',
-                contents='Responda, de forma curta, "Sucesso".'
-            )
-            return {"success": True, "message": f"Conexão OK (Fallback)! IA respondeu: {response.text}"}
-        except Exception as e2:
-            raise HTTPException(status_code=400, detail=f"Erro de Conexão IA: {str(e2)}")
+        # Verifica se tem prefixo data:application e remove
+        if ',' in pfx_b64:
+            pfx_b64 = pfx_b64.split(',')[1]
+            
+        pfx_data = base64.b64decode(pfx_b64)
+        private_key, certificate, additional_certificates = pkcs12.load_key_and_certificates(pfx_data, password.encode())
+        
+        subj = certificate.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
+        cn = subj[0].value if subj else "Desconhecido"
+        
+        return {"success": True, "message": f"✅ Certificado Válido! ({cn})"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"❌ Erro ao ler certificado. Verifique a senha e o arquivo (.pfx ou .p12). Erro: {str(e)}")
 

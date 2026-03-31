@@ -119,6 +119,36 @@ class Manager:
             'dias_atraso': max(0, dias_atraso)
         }
 
+    def obter_agendamento(self):
+        conn = conectar(self.cnpj_empresa)
+        c = conn.cursor()
+        c.execute("SELECT * FROM agendamento LIMIT 1")
+        row = c.fetchone()
+        conn.close()
+        if not row:
+            return {'dias_ui': [], 'hora_envio': '09:00', 'ignorar_feriados': True, 'ativo': False}
+        import json
+        try:
+            dias = json.loads(row[1]) if '[' in (row[1] or '') else [d.strip() for d in (row[1] or '').split(',') if d.strip()]
+        except:
+            dias = []
+        return {
+            'dias_ui': dias,
+            'hora_envio': row[2] or '09:00',
+            'ignorar_feriados': bool(row[3]),
+            'ativo': bool(row[4])
+        }
+
+    def salvar_config_agendamento(self, dias, hora, ignorar_feriados, ativo):
+        import json
+        conn = conectar(self.cnpj_empresa)
+        c = conn.cursor()
+        c.execute("DELETE FROM agendamento")
+        c.execute("INSERT INTO agendamento (dias_ui, horario_envio, pular_feriados, ativo) VALUES (?, ?, ?, ?)",
+                  (json.dumps(dias), hora, 1 if ignorar_feriados else 0, 1 if ativo else 0))
+        conn.commit()
+        conn.close()
+
     def gerar_mensagem_cobranca(self, nome_cliente, dados_cliente, total, itens):
         agora = datetime.now()
         saudacao = "Bom dia" if agora.hour < 12 else "Boa tarde" if agora.hour < 18 else "Boa noite"
@@ -549,14 +579,60 @@ class Manager:
             query += " ORDER BY a.data_hora DESC"
             df = pd.read_sql_query(query, conn, params=params_ex)
         
+        elif tipo_rel == "Negociacoes IA":
+            # Relatório de Negociações geradas pela IA
+            query = """
+                SELECT 
+                    n.criado_em as data_hora,
+                    n.cliente as pagador,
+                    n.mensagem_gerada as mensagem,
+                    n.status_resposta,
+                    (SELECT count(*) FROM titulos WHERE id IN (SELECT value FROM json_each('[' || n.titulos_ids || ']'))) as qtd_titulos
+                FROM negociacoes n
+                WHERE 1=1
+            """
+            params_n = []
+            if cliente and cliente != "Todos":
+                query += " AND n.cliente = ?"
+                params_n.append(cliente)
+            if data_inicio:
+                query += " AND n.criado_em >= ?"
+                params_n.append(data_inicio + " 00:00:00")
+            if data_fim:
+                query += " AND n.criado_em <= ?"
+                params_n.append(data_fim + " 23:59:59")
+            query += " ORDER BY n.id DESC"
+            df = pd.read_sql_query(query, conn, params=params_n)
+
+        elif tipo_rel == "Cartório":
+            # Relatório de Títulos em Cartório (incluindo status da automação)
+            query = """
+                SELECT 
+                    t.numero_nf, t.pagador, t.vencimento, t.valor,
+                    cj.status_automacao, cj.data_execucao, cj.log_erro,
+                    t.id as titulo_id
+                FROM titulos t
+                LEFT JOIN cartorio_jobs cj ON cj.titulo_id = t.id
+                WHERE t.status = 'Cartório' OR cj.id IS NOT NULL
+            """
+            params_c = []
+            if cliente and cliente != "Todos":
+                query += " AND t.pagador = ?"
+                params_c.append(cliente)
+            if data_inicio:
+                query += " AND (cj.data_execucao >= ? OR t.data_atualizacao >= ?)"
+                params_c.extend([data_inicio + " 00:00:00", data_inicio + " 00:00:00"])
+            if data_fim:
+                query += " AND (cj.data_execucao <= ? OR t.data_atualizacao <= ?)"
+                params_c.extend([data_fim + " 23:59:59", data_fim + " 23:59:59"])
+            query += " ORDER BY cj.id DESC, t.vencimento ASC"
+            df = pd.read_sql_query(query, conn, params=params_c)
+
         else:
-            # Relatório Financeiro (Todos, Abertos, Pagos, Cartório)
-            # JOIN com última auditoria para trazer usuário e data real
+            # Relatório Financeiro (Todos, Abertos, Pagos)
             status_filter = ""
             if tipo_rel == "Pagos":
                 status_filter = "AND t.status IN ('Pago', 'Baixado', 'Recebido')"
-            elif tipo_rel == "Cartório":
-                status_filter = "AND t.status = 'Cartório'"
             elif tipo_rel == "Aberto":
                 status_filter = "AND t.status = 'Aberto'"
             

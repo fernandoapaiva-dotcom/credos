@@ -11,6 +11,7 @@ export const Settings: React.FC = () => {
   const [testingSMTP, setTestingSMTP] = useState(false);
   const [testingIMAP, setTestingIMAP] = useState(false);
   const [testingIA, setTestingIA] = useState(false);
+  const [testingCert, setTestingCert] = useState(false);
   
   const [waCheckingStatus, setWaCheckingStatus] = useState(false);
   const [waGeneratingQr, setWaGeneratingQr] = useState(false);
@@ -35,6 +36,17 @@ export const Settings: React.FC = () => {
       setCompanyCnpj(cnpj);
       loadConfigs(cnpj);
       loadScheduler(cnpj);
+      
+      // Auto check WhatsApp status on load
+      const checkInitialStatus = async () => {
+        try {
+          const res = await api.post(`/companies/${cnpj}/whatsapp/status`);
+          setWaStatus(res.data.status);
+        } catch (e) {
+          setWaStatus('erro_conexao');
+        }
+      };
+      checkInitialStatus();
     }
   }, []);
 
@@ -77,10 +89,29 @@ export const Settings: React.FC = () => {
     }
   };
 
+  const handlePfxUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        // Remove prefix 'data:application/x-pkcs12;base64,' if present
+        let base64 = reader.result as string;
+        if (base64.includes(',')) base64 = base64.split(',')[1];
+        setConfig({ ...config, cartorio_pfx_b64: base64 });
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
   const saveScheduler = async () => {
     setLoading(true);
     try {
-      await api.patch(`/companies/${companyCnpj}/config`, { gemini_api_key: config.gemini_api_key });
+      await api.patch(`/companies/${companyCnpj}/config`, { 
+        gemini_api_key: config.gemini_api_key,
+        cartorio_pfx_b64: config.cartorio_pfx_b64,
+        cartorio_pfx_pass: config.cartorio_pfx_pass,
+        cartorio_interval_min: config.cartorio_interval_min
+      });
       await api.post(`/companies/${companyCnpj}/scheduler`, scheduler);
       alert('Cérebro IA e Agendamento salvos!');
     } catch (e) {
@@ -111,6 +142,21 @@ export const Settings: React.FC = () => {
       alert(e.response?.data?.detail || 'Erro ao testar email de Recebimento (IMAP)');
     }
     setTestingIMAP(false);
+  };
+
+  const testCartorioCert = async () => {
+    setTestingCert(true);
+    try {
+      await api.patch(`/companies/${companyCnpj}/config`, { 
+        cartorio_pfx_b64: config.cartorio_pfx_b64,
+        cartorio_pfx_pass: config.cartorio_pfx_pass
+      });
+      const res = await api.post(`/companies/${companyCnpj}/cartorio/test-cert`);
+      alert(res.data.message);
+    } catch (e: any) {
+      alert(e.response?.data?.detail || 'Erro ao testar. Verifique se importou o arquivo corretamente e se a senha está certa.');
+    }
+    setTestingCert(false);
   };
 
   const testIA = async () => {
@@ -229,6 +275,36 @@ export const Settings: React.FC = () => {
             </div>
             
             <hr className="border-slate-200 dark:border-dark-border" />
+
+            <h3 className="text-lg font-bold dark:text-white mb-4 mt-6">Cartões e Recebimentos PIX (Envio pela IA)</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pb-6">
+              <div>
+                <label className="block text-sm font-medium mb-1">Tipo de Chave PIX</label>
+                <select 
+                  className="input-field" 
+                  value={config.tipo_chave_pix || 'CNPJ'} 
+                  onChange={e => setConfig({...config, tipo_chave_pix: e.target.value})}
+                >
+                  <option value="CNPJ">CNPJ</option>
+                  <option value="CPF">CPF</option>
+                  <option value="Telefone">Telefone</option>
+                  <option value="Email">E-mail</option>
+                  <option value="Aleatória">Chave Aleatória</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">Chave PIX Exata</label>
+                <input 
+                  type="text" 
+                  className="input-field" 
+                  value={config.chave_pix || ''} 
+                  onChange={e => setConfig({...config, chave_pix: e.target.value})} 
+                  placeholder="Ex: 54.804... etc"
+                />
+              </div>
+            </div>
+            
+            <hr className="border-slate-200 dark:border-dark-border" />
             
             <h3 className="text-lg font-bold dark:text-white mb-4">Aparência e Marca (White-label)</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-start">
@@ -289,8 +365,27 @@ export const Settings: React.FC = () => {
               </div>
             </div>
 
-            <div className="flex justify-end mb-6">
+            <div className="flex justify-end mb-4">
               <button onClick={saveConfig} disabled={loading} className="btn-primary py-2 px-4 shadow-sm text-sm"><Save size={16} className="mr-2"/> Gravar Chaves Evolution API</button>
+            </div>
+
+            <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-xl p-4 mb-6">
+              <h4 className="font-semibold text-amber-800 dark:text-amber-300 mb-2">📱 Número do Operador (Notificações Internas)</h4>
+              <p className="text-xs text-amber-700 dark:text-amber-400 mb-3">
+                Este número receberá alertas quando um cliente enviar comprovante de pagamento e quando um título chegar ao prazo de cartório (20 dias). Inclua DDI+DDD (ex: 5561999999999).
+              </p>
+              <div className="flex gap-3">
+                <input
+                  type="text"
+                  className="input-field flex-1"
+                  value={config.operador_whatsapp || ''}
+                  onChange={e => setConfig({...config, operador_whatsapp: e.target.value})}
+                  placeholder="5561999999999"
+                />
+                <button onClick={saveConfig} disabled={loading} className="btn-primary whitespace-nowrap">
+                  <Save size={16} className="mr-2"/>Salvar
+                </button>
+              </div>
             </div>
             
             <div className="bg-slate-50 dark:bg-dark-surface border border-slate-200 dark:border-dark-border rounded-xl p-6 flex flex-col md:flex-row items-center gap-6 mt-4">
@@ -405,6 +500,56 @@ export const Settings: React.FC = () => {
                   onChange={e => setConfig({...config, gemini_api_key: e.target.value})} 
                   placeholder="AIzaSy..."
                 />
+             </div>
+
+             <div className="bg-white dark:bg-dark-surface p-6 rounded-xl border border-slate-200 dark:border-dark-border mb-6">
+                <h4 className="font-bold text-slate-800 dark:text-white mb-4 flex items-center gap-2">
+                   🏛️ Configurações de Cartório (Robô Playwright)
+                </h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                   <div className="space-y-4">
+                      <div>
+                         <label className="block text-sm font-medium mb-1">Certificado Digital A1 (.pfx)</label>
+                         <div className="flex items-center gap-3">
+                            <label className="btn-secondary py-1.5 px-3 text-xs cursor-pointer">
+                               <Upload size={14} className="mr-2" /> {config.cartorio_pfx_b64 ? 'Alterar Certificado' : 'Selecionar .pfx'}
+                               <input type="file" className="hidden" accept=".pfx,.p12" onChange={handlePfxUpload} />
+                            </label>
+                            {config.cartorio_pfx_b64 && <span className="text-xs text-green-500 font-medium">Carregado ✅</span>}
+                         </div>
+                      </div>
+                       <div>
+                         <label className="block text-sm font-medium mb-1">Senha do Certificado</label>
+                         <div className="flex gap-2">
+                           <input 
+                             type="password" 
+                             className="input-field" 
+                             value={config.cartorio_pfx_pass || ''} 
+                             onChange={e => setConfig({...config, cartorio_pfx_pass: e.target.value})} 
+                           />
+                           <button 
+                             onClick={testCartorioCert}
+                             disabled={testingCert}
+                             className="btn-secondary whitespace-nowrap"
+                           >
+                             {testingCert ? <Loader2 className="animate-spin" size={16} /> : "Testar Validade"}
+                           </button>
+                         </div>
+                      </div>
+                   </div>
+                   <div className="space-y-4">
+                      <div>
+                         <label className="block text-sm font-medium mb-1">Intervalo entre Envios (minutos)</label>
+                         <input 
+                           type="number" 
+                           className="input-field w-32" 
+                           value={config.cartorio_interval_min || 5} 
+                           onChange={e => setConfig({...config, cartorio_interval_min: Number(e.target.value)})} 
+                         />
+                         <p className="text-[10px] text-slate-500 mt-1">Recomendado: 5 a 10 minutos para evitar bloqueios.</p>
+                      </div>
+                   </div>
+                </div>
              </div>
 
              <div className="bg-slate-50 dark:bg-dark-surface p-6 rounded-xl border border-slate-200 dark:border-dark-border">
