@@ -175,3 +175,31 @@ relatorio_debitos_*.txt
 
 # 6. Logs de Erro Locais
 *.log
+
+# 7. Perfis temporarios do Chrome/Edge para automacao do cartorio
+temp_chrome_profile/
+temp_edge_profile/
+temp_data/
+
+# 8. Screenshots geradas pelo robo do cartorio (dados sensiveis)
+passo1_completo.png
+passo2_credor.png
+passo3_devedor_inicio.png
+passo3_devedor_fim.png
+passo4_revisao.png
+passo5_pre_envio.png
+passo5_final.png
+preenchimento_passo1.png
+preenchimento_passo2_inicio.png
+erro_login.png
+inspecao_portal_completa.png
+
+# 9. Scripts de debug e inspecao local
+debug_*.py
+inspect_*.py
+diagnostico_*.py
+descobrir_*.py
+check_*.py
+inspect_*.png
+EVO_DEBUG.txt
+qr_response.json
