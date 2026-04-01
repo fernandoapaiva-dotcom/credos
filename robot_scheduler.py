@@ -10,6 +10,8 @@ from src.manager import Manager
 from src.ai_handler import get_ai_response
 from src.mail_scanner import MailScanner
 from src.mailer import Mailer
+from src.backup_manager import perform_backup
+from src.worker import verificar_retorno_cartorio, processar_fila_cartorio
 
 # Configuração de Logs (Cria um arquivo robot.log para você ver o que aconteceu)
 logging.basicConfig(
@@ -132,8 +134,26 @@ def executar_rotina_de_cobranca():
             print(error_msg)
             logging.error(error_msg)
 
-# Agendamento: Roda a função a cada 1 minuto para checar se "bateu" a hora configurada
+def rotina_backup_diario():
+    agora = datetime.datetime.now().strftime("%H:%M")
+    if agora == "12:00":
+        print("💾 [Backup] Iniciando backup diário das 12:00...")
+        logging.info("Iniciando backup programado (12:00)")
+        success, result = perform_backup()
+        if success:
+            logging.info(f"Backup concluído com sucesso: {result}")
+        else:
+            logging.error(f"Falha no backup programado: {result}")
+
+# Agendamento: 
+# Roda a rotina de cobrança a cada 1 minuto
 schedule.every().minute.do(executar_rotina_de_cobranca)
+# Roda a checagem de backup a cada 1 minuto
+schedule.every().minute.do(rotina_backup_diario)
+# Processa fila do cartório a cada 5 minutos
+schedule.every(5).minutes.do(processar_fila_cartorio)
+# Verifica retorno do cartório todo dia às 10:00
+schedule.every().day.at("10:00").do(verificar_retorno_cartorio)
 
 if __name__ == "__main__":
     print("🤖 Robô Credos Ativado.")

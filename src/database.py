@@ -138,6 +138,12 @@ def _verificar_migracoes_v3(conn):
     tit_cols = [col[1] for col in c.fetchall()]
     if 'data_promessa' not in tit_cols:
         c.execute("ALTER TABLE titulos ADD COLUMN data_promessa TEXT")
+    if 'emissao' not in tit_cols:
+        c.execute("ALTER TABLE titulos ADD COLUMN emissao TEXT")
+    if 'data_envio_cartorio' not in tit_cols:
+        c.execute("ALTER TABLE titulos ADD COLUMN data_envio_cartorio TEXT")
+    if 'status_retorno_cartorio' not in tit_cols:
+        c.execute("ALTER TABLE titulos ADD COLUMN status_retorno_cartorio TEXT DEFAULT 'N/A'")
 
     # Coluna para número do operador (WhatsApp do grupo interno)
     c.execute("PRAGMA table_info(config)")
@@ -175,7 +181,7 @@ def _criar_tabelas_empresa(conn):
     # 3. Títulos
     c.execute('''CREATE TABLE IF NOT EXISTS titulos (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        pagador TEXT, numero_nf TEXT, vencimento TEXT, valor REAL,
+        pagador TEXT, numero_nf TEXT, vencimento TEXT, emissao TEXT, valor REAL,
         status TEXT DEFAULT 'Aberto', acao TEXT DEFAULT 'Cobrar', data_promessa TEXT
     )''')
     # 4. Agendamento

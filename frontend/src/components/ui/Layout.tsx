@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Users, FileText, UploadCloud, LogOut, Sun, Moon, ArrowLeftRight, Settings, Shield, Menu, X } from 'lucide-react';
+import { LayoutDashboard, Users, FileText, UploadCloud, LogOut, Sun, Moon, ArrowLeftRight, Settings, Shield, Menu, X, MessageSquare } from 'lucide-react';
 import clsx from 'clsx';
 
 interface LayoutProps {
@@ -25,6 +25,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, title }) => {
   const menu = [
     { label: 'Dashboard', icon: LayoutDashboard, path: '/dashboard' },
     { label: 'CRM & Títulos', icon: Users, path: '/crm' },
+    { label: 'Histórico WhatsApp', icon: MessageSquare, path: '/conversations' },
     { label: 'Importar PDF', icon: UploadCloud, path: '/import' },
     { label: 'Relatórios', icon: FileText, path: '/reports' },
     { label: 'Configurações', icon: Settings, path: '/settings' },
@@ -37,7 +38,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, title }) => {
   };
 
   return (
-    <div className="flex h-screen bg-slate-50 dark:bg-dark-bg transition-colors overflow-hidden">
+    <div className="flex h-screen bg-slate-50 dark:bg-dark-bg transition-colors overflow-hidden print:h-auto print:overflow-visible print:block">
       
       {/* MOBILE OVERLAY */}
       {isSidebarOpen && (
@@ -49,7 +50,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, title }) => {
 
       {/* SIDEBAR */}
       <aside className={clsx(
-        "fixed inset-y-0 left-0 w-64 bg-white dark:bg-dark-surface border-r border-slate-200 dark:border-dark-border flex flex-col transition-all duration-300 z-40 transform lg:translate-x-0 lg:static lg:inset-0 shadow-xl lg:shadow-none",
+        "fixed inset-y-0 left-0 w-64 bg-white dark:bg-dark-surface border-r border-slate-200 dark:border-dark-border flex flex-col transition-all duration-300 z-40 transform lg:translate-x-0 lg:static lg:inset-0 shadow-xl lg:shadow-none print:hidden",
         isSidebarOpen ? "translate-x-0" : "-translate-x-full"
       )}>
         <div className="h-16 flex items-center px-6 border-b border-slate-100 dark:border-dark-border/50 font-bold text-xl text-primary-600 dark:text-primary-400 gap-3">
@@ -112,8 +113,8 @@ export const Layout: React.FC<LayoutProps> = ({ children, title }) => {
       </aside>
 
       {/* MAIN CONTENT */}
-      <main className="flex-1 flex flex-col min-w-0 overflow-hidden relative">
-        <header className="h-16 bg-white/80 dark:bg-dark-surface/80 backdrop-blur-md border-b border-slate-200 dark:border-dark-border flex items-center px-4 lg:px-8 z-10 gap-4">
+      <main className="flex-1 flex flex-col min-w-0 overflow-hidden relative print:overflow-visible print:block">
+        <header className="h-16 bg-white/80 dark:bg-dark-surface/80 backdrop-blur-md border-b border-slate-200 dark:border-dark-border flex items-center px-4 lg:px-8 z-10 gap-4 print:hidden">
           <button 
             className="lg:hidden p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-dark-bg/50 rounded-lg transition-colors"
             onClick={() => setSidebarOpen(true)}
@@ -122,8 +123,8 @@ export const Layout: React.FC<LayoutProps> = ({ children, title }) => {
           </button>
           <h1 className="text-lg lg:text-xl font-bold text-slate-800 dark:text-white truncate">{title}</h1>
         </header>
-        <div className="flex-1 overflow-auto p-4 lg:p-8 relative">
-          <div className="max-w-7xl mx-auto h-full animate-fade-in">
+        <div className="flex-1 overflow-auto p-4 lg:p-8 relative print:p-0 print:overflow-visible print:block">
+          <div className="max-w-7xl mx-auto h-full animate-fade-in print:max-w-none print:w-full print:block">
             {children}
           </div>
         </div>

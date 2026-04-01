@@ -54,3 +54,15 @@
 [54804458000122] Checando: http://localhost:8080/instance/connectionState/54804458000122
 [54804458000122] Resposta 200: {"instance":{"instanceName":"54804458000122","state":"open"}}
 [54804458000122] Resposta 200: {"instance":{"instanceName":"54804458000122","state":"open"}}
+[11504286000169] Checando: http://localhost:8080/instance/connectionState/11504286000169
+[11504286000169] Checando: http://localhost:8080/instance/connectionState/11504286000169
+[11504286000169] Resposta 200: {"instance":{"instanceName":"11504286000169","state":"open"}}
+[11504286000169] Resposta 200: {"instance":{"instanceName":"11504286000169","state":"open"}}
+[54804458000122] Checando: http://localhost:8080/instance/connectionState/54804458000122
+[54804458000122] Checando: http://localhost:8080/instance/connectionState/54804458000122
+[54804458000122] Resposta 200: {"instance":{"instanceName":"54804458000122","state":"open"}}
+[54804458000122] Resposta 200: {"instance":{"instanceName":"54804458000122","state":"open"}}
+[54804458000122] Checando: http://localhost:8080/instance/connectionState/54804458000122
+[54804458000122] Checando: http://localhost:8080/instance/connectionState/54804458000122
+[54804458000122] Resposta 200: {"instance":{"instanceName":"54804458000122","state":"open"}}
+[54804458000122] Resposta 200: {"instance":{"instanceName":"54804458000122","state":"open"}}

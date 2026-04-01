@@ -60,3 +60,10 @@
     @apply w-full px-4 py-2 rounded-lg border border-slate-300 bg-white focus:border-primary-500 focus:ring-2 focus:ring-blue-200 transition-all outline-none dark:bg-dark-bg dark:border-dark-border dark:text-white dark:focus:ring-primary-900;
   }
 }
+
+@media print {
+  @page {
+    size: portrait;
+    margin: 1cm;
+  }
+}

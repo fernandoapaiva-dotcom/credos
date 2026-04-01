@@ -10,6 +10,7 @@ import { ImportPDF } from './pages/ImportPDF';
 import { Reports } from './pages/Reports';
 import { Settings } from './pages/Settings';
 import { Users } from './pages/Users';
+import { Conversations } from './pages/Conversations';
 
 const PrivateRoute: React.FC<{ children: React.ReactNode, requireCompany?: boolean }> = ({ children, requireCompany }) => {
   const { user, companyCnpj } = useAuth();
@@ -58,6 +59,12 @@ function App() {
             <Route path="/crm" element={
               <PrivateRoute requireCompany>
                 <CRM />
+              </PrivateRoute>
+            } />
+
+            <Route path="/conversations" element={
+              <PrivateRoute requireCompany>
+                <Conversations />
               </PrivateRoute>
             } />
 

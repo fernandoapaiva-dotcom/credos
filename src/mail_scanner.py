@@ -61,12 +61,44 @@ class MailScanner:
             elif filepath.lower().endswith('.xml'):
                 with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
                     texto_completo = f.read()
-            # Se for outro formato (zip/boleto sem extensão), não conseguimos ler fácil, 
-            # então retornamos vazio e confiamos na validação manual se necessário
         except Exception as e:
             print(f"Erro lendo arquivo {filepath}: {e}")
         
         return texto_completo
+
+    def extrair_dados_fiscais(self, filepath):
+        """Dada uma NF, tenta extrair a Data de Emissão e outros dados essenciais cruciais."""
+        dados = {'emissao': None}
+        try:
+            texto = self._extrair_texto_arquivo(filepath)
+            
+            # 1. Se for XML, a precisão é cirúrgica
+            if filepath.lower().endswith('.xml'):
+                # Busca por <dhEmi>2026-03-31T10:00:00-03:00</dhEmi>
+                match = re.search(r'<dhEmi>([^<]+)</dhEmi>', texto)
+                if match:
+                    iso_date = match.group(1).split('T')[0] # Pega só a data
+                    # Converte para DD/MM/YYYY para seguir o padrão do banco
+                    partes = iso_date.split('-')
+                    if len(partes) == 3:
+                        dados['emissao'] = f"{partes[2]}/{partes[1]}/{partes[0]}"
+                        print(f"   XML: Extraída emissão {dados['emissao']}")
+            
+            # 2. Se for PDF, usamos Regex focada em Danfes brasileiros
+            elif filepath.lower().endswith('.pdf'):
+                # Busca padrões comuns, ex: DATA DE EMISSÃO 10/10/2025 ou apenas 10/10/2025 próximo a Emissão
+                
+                # Regex tenta achar DD/MM/YYYY
+                dates = re.findall(r'(\d{2}/\d{2}/\d{4})', texto)
+                # A primeira data no topo da Danfe geralmente é a emissão.
+                if dates:
+                    dados['emissao'] = dates[0]
+                    print(f"   PDF: Extraída possível emissão {dados['emissao']}")
+                    
+        except Exception as e:
+            print(f"Erro ao extrair dados fiscais de {filepath}: {e}")
+            
+        return dados
 
     def validar_arquivo_pertence_cliente(self, filepath, cnpj_alvo, nome_alvo, vencimento_alvo=None, valor_alvo=None, nf_alvo=None):
         """
@@ -223,6 +255,32 @@ class MailScanner:
             print(f"Erro Scanner: {e}")
         
         return list(set(arquivos_baixados))
+
+    def buscar_e_extrair_dados_nf(self, numero_nf, cnpj_cliente, nome_cliente):
+        """Busca o email, baixa XML/PDF e tenta extrair a 'Data de Emissão'."""
+        arquivos = self.baixar_anexos_por_nf_validado(numero_nf, cnpj_cliente, nome_cliente)
+        
+        # Prioriza a leitura de XML se houver os dois (PDF e XML)
+        xmls = [f for f in arquivos if f.lower().endswith('.xml')]
+        pdfs = [f for f in arquivos if f.lower().endswith('.pdf')]
+        
+        ordem_leitura = xmls + pdfs
+        
+        for fpath in ordem_leitura:
+            dados = self.extrair_dados_fiscais(fpath)
+            if dados.get('emissao'):
+                # Limpa arquivos temporários pois só precisávamos da data
+                for tmp_file in arquivos:
+                    try: os.remove(tmp_file)
+                    except: pass
+                return dados
+                
+        # Limpa tudo se não achou nada util
+        for tmp_file in arquivos:
+            try: os.remove(tmp_file)
+            except: pass
+            
+        return None
 
 # --- FUNÇÃO INDIVIDUAL NECESSÁRIA PARA O APP.PY ---
 def conectar_email(u, p, s):

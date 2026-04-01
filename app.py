@@ -563,6 +563,42 @@ if selected == "Operacional":
                     st.rerun()
 
             st.divider()
+            
+            # --- BLOCO: TÍTULOS AGUARDANDO DADOS FISCAIS ---
+            conn_aj = conectar(conf.get('empresa_cnpj'))
+            conn_aj.row_factory = __import__('sqlite3').Row
+            # Busca jobs com status Aguardando Dados, mas precisamos garantir que a tabela existe
+            try:
+                jobs_pendentes = conn_aj.cursor().execute('''
+                    SELECT cj.id as job_id, t.id as titulo_id, t.pagador, t.numero_nf, t.valor, cj.log_erro
+                    FROM cartorio_jobs cj
+                    JOIN titulos t ON cj.titulo_id = t.id
+                    WHERE cj.status_automacao = 'Aguardando Dados'
+                ''').fetchall()
+                
+                if jobs_pendentes:
+                    st.error("🚨 Atenção: Existem títulos barrados no Cartório por falta de Dados Fiscais. Preencha abaixo para destravá-los:")
+                    for j in jobs_pendentes:
+                        with st.expander(f"🔴 NF {j['numero_nf']} - {j['pagador']} | R$ {float(j['valor']):,.2f}", expanded=True):
+                            st.write(f"**Motivo do Bloqueio:** {j['log_erro']}")
+                            with st.form(f"form_dados_faltantes_{j['job_id']}"):
+                                c1, c2 = st.columns(2)
+                                n_emissao = c1.date_input("Data de Emissão Real da NF", format="DD/MM/YYYY")
+                                if c2.form_submit_button("💾 Salvar e Reenviar ao Cartório", type="primary", use_container_width=True):
+                                    em_str = n_emissao.strftime("%d/%m/%Y")
+                                    cj_cur = conn_aj.cursor()
+                                    cj_cur.execute("UPDATE titulos SET emissao=? WHERE id=?", (em_str, j['titulo_id']))
+                                    cj_cur.execute("UPDATE cartorio_jobs SET status_automacao='Pendente', log_erro=NULL, intervacao_manual=1 WHERE id=?", (j['job_id'],))
+                                    conn_aj.commit()
+                                    st.success("Dado inserido com sucesso! O robô assumirá novamente.")
+                                    time.sleep(1.5)
+                                    st.rerun()
+            except Exception as e:
+                pass
+            finally:
+                conn_aj.close()
+
+            st.divider()
             st.markdown("#### 📂 Títulos por Cliente")
             cli_sel_tit = st.selectbox("Selecione um cliente para ver todos os títulos", ["--"] + [c['nome'] for c in all_clis])
             

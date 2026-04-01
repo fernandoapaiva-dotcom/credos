@@ -20,6 +20,8 @@ interface Title {
   valor: number;
   status: string;
   acao: string;
+  data_envio_cartorio?: string;
+  status_retorno_cartorio?: string;
 }
 
 export const CRM: React.FC = () => {
@@ -30,6 +32,7 @@ export const CRM: React.FC = () => {
   const [selectedTitleIds, setSelectedTitleIds] = useState<number[]>([]);
   
   const [activeTab, setActiveTab] = useState<'carteira' | 'comprovantes'>('carteira');
+  const [titleFilter, setTitleFilter] = useState<'pendentes' | 'pagos' | 'cartorio'>('pendentes');
   const [vouchers, setVouchers] = useState<any[]>([]);
   const [loadingVouchers, setLoadingVouchers] = useState(false);
   const [loadingClients, setLoadingClients] = useState(false);
@@ -347,6 +350,18 @@ export const CRM: React.FC = () => {
     }
   };
 
+  const displayedTitles = useMemo(() => {
+    return titles.filter(t => {
+      if (titleFilter === 'pendentes') {
+        return !['Pago', 'Baixado', 'Cancelado', 'Cartório'].includes(t.status);
+      } else if (titleFilter === 'pagos') {
+        return ['Pago', 'Baixado', 'Cancelado'].includes(t.status);
+      } else {
+        return t.status === 'Cartório';
+      }
+    });
+  }, [titles, titleFilter]);
+
   return (
     <Layout title="CRM e Gestão Financeira">
       {/* TABS HEADER */}
@@ -479,22 +494,45 @@ export const CRM: React.FC = () => {
               
               <div className="flex-1 overflow-y-auto p-4 lg:p-8 bg-slate-50/30 dark:bg-dark-bg/30">
                 <div className="flex items-center justify-between mb-6">
-                  <h3 className="text-lg font-black dark:text-white flex items-center gap-3">
-                    Carteira de Títulos 
-                    <span className="px-3 py-1 bg-primary-100 text-primary-700 dark:bg-primary-900/40 dark:text-primary-400 rounded-full text-xs font-bold">{titles.length} Títulos</span>
-                  </h3>
+                  <div className="flex flex-col gap-2">
+                    <h3 className="text-lg font-black dark:text-white flex items-center gap-3">
+                      Carteira de Títulos 
+                      <span className="px-3 py-1 bg-primary-100 text-primary-700 dark:bg-primary-900/40 dark:text-primary-400 rounded-full text-xs font-bold">{displayedTitles.length} Títulos</span>
+                    </h3>
+                    
+                    <div className="flex bg-slate-200/50 dark:bg-dark-bg p-1 rounded-xl w-fit mt-1">
+                      <button 
+                        onClick={() => setTitleFilter('pendentes')}
+                        className={`px-4 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider transition-all ${titleFilter === 'pendentes' ? 'bg-white dark:bg-dark-surface shadow-sm text-primary-600' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400'}`}
+                      >
+                        Inadimplentes
+                      </button>
+                      <button 
+                        onClick={() => setTitleFilter('pagos')}
+                        className={`px-4 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider transition-all ${titleFilter === 'pagos' ? 'bg-white dark:bg-dark-surface shadow-sm text-green-600' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400'}`}
+                      >
+                        Pagos / Histórico
+                      </button>
+                      <button 
+                        onClick={() => setTitleFilter('cartorio')}
+                        className={`px-4 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider transition-all ${titleFilter === 'cartorio' ? 'bg-white dark:bg-dark-surface shadow-sm text-red-600' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400'}`}
+                      >
+                        Cartório
+                      </button>
+                    </div>
+                  </div>
                   {loadingTitles && <Loader2 className="animate-spin text-primary-500" size={20} />}
                 </div>
 
-                {titles.length > 0 && (
+                {displayedTitles.length > 0 && (
                   <div className="mb-4 flex flex-wrap items-center gap-4 bg-white dark:bg-dark-surface p-4 rounded-2xl border border-slate-200 dark:border-dark-border shadow-sm">
                     <div className="flex items-center gap-2">
                       <input 
                         type="checkbox" 
-                        checked={titles.length > 0 && selectedTitleIds.length === titles.length}
+                        checked={displayedTitles.length > 0 && selectedTitleIds.length === displayedTitles.length}
                         onChange={(e) => {
                           if (e.target.checked) {
-                            setSelectedTitleIds(titles.map(t => t.id));
+                            setSelectedTitleIds(displayedTitles.map(t => t.id));
                           } else {
                             setSelectedTitleIds([]);
                           }
@@ -528,14 +566,14 @@ export const CRM: React.FC = () => {
                   </div>
                 )}
                 
-                {titles.length === 0 && !loadingTitles ? (
+                {displayedTitles.length === 0 && !loadingTitles ? (
                   <div className="flex flex-col items-center justify-center py-20 text-slate-400 bg-white dark:bg-dark-surface rounded-2xl border-2 border-dashed border-slate-200 dark:border-dark-border">
                     <FileWarning size={48} className="mb-4 opacity-20" />
-                    <p className="font-medium">Nenhum título ativo encontrado.</p>
+                    <p className="font-medium">Nenhum título {titleFilter === 'pendentes' ? 'pendente' : titleFilter === 'pagos' ? 'pago' : 'em cartório'} encontrado.</p>
                   </div>
                 ) : (
                   <div className="grid grid-cols-1 gap-4">
-                    {titles.map(t => (
+                    {displayedTitles.map(t => (
                       <div key={t.id} className="border border-slate-200 dark:border-dark-border rounded-2xl p-5 flex flex-col xl:flex-row items-center justify-between gap-6 bg-white dark:bg-dark-surface shadow-sm hover:shadow-md transition-all">
                         <div className="flex items-center gap-4 w-full xl:w-auto flex-1">
                           <input 
@@ -555,7 +593,7 @@ export const CRM: React.FC = () => {
                             </span>
                           </div>
                           
-                          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                          <div className={`grid gap-4 ${titleFilter === 'cartorio' ? 'grid-cols-2 lg:grid-cols-5' : 'grid-cols-2 lg:grid-cols-4'}`}>
                             <div className="space-y-0.5">
                               <p className="text-[10px] text-slate-400 uppercase font-black tracking-tight underline decoration-primary-200">NF / Documento</p>
                               <p className="font-bold text-slate-700 dark:text-slate-300">{t.numero_nf}</p>
@@ -564,6 +602,27 @@ export const CRM: React.FC = () => {
                               <p className="text-[10px] text-slate-400 uppercase font-black tracking-tight underline decoration-primary-200">Vencimento</p>
                               <p className="font-bold text-slate-700 dark:text-slate-300">{t.vencimento}</p>
                             </div>
+                            {titleFilter === 'cartorio' && (
+                              <>
+                                <div className="space-y-0.5">
+                                  <p className="text-[10px] text-slate-400 uppercase font-black tracking-tight">Enviado em</p>
+                                  <p className="font-bold text-slate-700 dark:text-slate-300 text-xs">
+                                    {t.data_envio_cartorio ? new Date(t.data_envio_cartorio).toLocaleDateString('pt-BR') : '—'}
+                                  </p>
+                                </div>
+                                <div className="space-y-0.5">
+                                  <p className="text-[10px] text-slate-400 uppercase font-black tracking-tight">Retorno</p>
+                                  <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-black uppercase ${
+                                    t.status_retorno_cartorio === 'Acatado' ? 'bg-green-100 text-green-700' :
+                                    t.status_retorno_cartorio === 'Reenviar' ? 'bg-yellow-100 text-yellow-700' :
+                                    t.status_retorno_cartorio === 'Notificado' ? 'bg-blue-100 text-blue-700' :
+                                    'bg-slate-100 text-slate-500'
+                                  }`}>
+                                    {t.status_retorno_cartorio || 'Aguardando'}
+                                  </span>
+                                </div>
+                              </>
+                            )}
                             <div className="space-y-0.5">
                               <p className="text-[10px] text-slate-400 uppercase font-black tracking-tight underline decoration-primary-200">Fluxo</p>
                               <select 

@@ -4,6 +4,8 @@ from src.rag_negotiator import RAGNegotiator
 from src.cartorio_automation import CartorioAutomation
 import json
 import asyncio
+from datetime import datetime
+import time
 
 def disparar_cobranca_automatica(forcar_execucao=False, cnpj_filtro=None):
     """
@@ -299,6 +301,33 @@ def processar_fila_cartorio(cnpj_filtro=None):
             job_id, titulo_id = jobs[0]
             print(f"   🚀 Processando Cartório Job #{job_id} para Título ID {titulo_id}...")
             
+            # --- 1. VERIFICAÇÃO DE DADOS ESSENCIAIS (EMAIL EXTRACTION) ---
+            conn.row_factory = __import__('sqlite3').Row
+            titulo = conn.cursor().execute("SELECT * FROM titulos WHERE id=?", (titulo_id,)).fetchone()
+            
+            # Se a emissão não estiver preenchida (nem pelo scanner passado nem manual)
+            if titulo and not titulo.get('emissao'):
+                print(f"   🔍 Buscando XML/PDF da NF {titulo['numero_nf']} no E-mail...")
+                from src.mail_scanner import MailScanner
+                scanner = MailScanner(config)
+                
+                cli = conn.cursor().execute("SELECT nome, cnpj FROM clientes WHERE trim(nome)=?", (titulo['pagador'].strip(),)).fetchone()
+                
+                dados_extraidos = None
+                if cli:
+                   dados_extraidos = scanner.buscar_e_extrair_dados_nf(titulo['numero_nf'], cli['cnpj'], cli['nome'])
+                
+                if dados_extraidos and dados_extraidos.get('emissao'):
+                    print(f"   ✅ Extração Inteligente: Emissão inserida ({dados_extraidos['emissao']})")
+                    conn.cursor().execute("UPDATE titulos SET emissao=? WHERE id=?", (dados_extraidos['emissao'], titulo_id))
+                    conn.commit()
+                else:
+                    print(f"   ⚠️ NF não encontrada no email ou extração falhou.")
+                    conn.cursor().execute("UPDATE cartorio_jobs SET status_automacao = 'Aguardando Dados', log_erro = 'Falta Data de Emissão. Preencha manualmente no CRM.' WHERE id = ?", (job_id,))
+                    conn.commit()
+                    conn.close()
+                    continue
+            
             # Marca como processando para evitar duplicidade
             conn.cursor().execute("UPDATE cartorio_jobs SET status_automacao = 'Processando' WHERE id = ?", (job_id,))
             conn.commit()
@@ -371,7 +400,102 @@ def verificar_acordos_vencidos(cnpj_filtro=None):
         except Exception as e:
             print(f"❌ Erro verificando acordos ({cnpj}): {e}")
 
+def verificar_retorno_cartorio(cnpj_filtro=None):
+    """
+    Acompanhamento Pós-Protesto:
+    - Verifica títulos enviados ao cartório há mais de 5 dias ainda com status 'Aguardando'.
+    - Notifica o operador sobre o status e pede atualização de dados se necessário.
+    - Se o status_retorno for 'Devolvido', agenda nova tentativa de envio.
+    """
+    from src.evolution_controller import EvolutionController
+    from src.database import carregar_configuracoes_db
+
+    print(f"🏛️ [{datetime.now().strftime('%d/%m %H:%M')}] Verificando Retornos do Cartório...")
+
+    agendamentos = listar_todos_agendamentos_ativos()
+    if cnpj_filtro:
+        agendamentos = [ag for ag in agendamentos if ag['empresa_dona_cnpj'] == cnpj_filtro]
+
+    for ag in agendamentos:
+        cnpj = ag['empresa_dona_cnpj']
+        try:
+            conn = conectar(cnpj)
+            conn.row_factory = __import__('sqlite3').Row
+            config = carregar_configuracoes_db(cnpj)
+            operador_num = config.get('operador_whatsapp')
+
+            if not operador_num:
+                conn.close()
+                continue
+
+            # Busca títulos em Cartório há mais de 5 dias ainda sem resposta
+            titulos_aguardando = conn.cursor().execute("""
+                SELECT t.id, t.numero_nf, t.valor, t.vencimento, t.pagador, t.data_envio_cartorio, t.status_retorno_cartorio
+                FROM titulos t
+                WHERE t.status = 'Cartório'
+                  AND t.status_retorno_cartorio = 'Aguardando'
+                  AND t.data_envio_cartorio IS NOT NULL
+                  AND t.data_envio_cartorio <= datetime('now', '-5 days')
+            """).fetchall()
+
+            evo = EvolutionController(config=config, nome_empresa_cliente=config.get('empresa_nome'))
+
+            for tit in titulos_aguardando:
+                tit = dict(tit)
+                dias_envio = (datetime.now() - datetime.strptime(tit['data_envio_cartorio'], "%Y-%m-%d %H:%M:%S")).days
+
+                msg = (
+                    f"🏛️ *ACOMPANHAMENTO DE CARTÓRIO*\n"
+                    f"O título *NF {tit['numero_nf']}* do cliente *{tit['pagador']}* "
+                    f"foi enviado ao cartório há *{dias_envio} dias*.\n"
+                    f"Valor: *R$ {tit['valor']:,.2f}*\n\n"
+                    f"O cartório ainda não retornou. Deseja:\n"
+                    f"✅ CARTORIO_ACATOU_{cnpj}_{tit['id']} — Confirmar que foi acatado\n"
+                    f"🔄 CARTORIO_REENVIAR_{cnpj}_{tit['id']} — Reenviar com dados corrigidos\n"
+                    f"❌ CARTORIO_CANCELAR_{cnpj}_{tit['id']} — Cancelar e reabrir o título"
+                )
+                evo.enviar_mensagem_texto(operador_num, msg)
+                print(f"   📋 Operador notificado sobre retorno do cartório: NF {tit['numero_nf']} ({tit['pagador']})")
+
+                # Marca como 'Notificado' para não repetir no próximo ciclo (renotifica só em +5 dias)
+                conn.cursor().execute(
+                    "UPDATE titulos SET status_retorno_cartorio = 'Notificado', data_envio_cartorio = ? WHERE id = ?",
+                    (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), tit['id'])
+                )
+                conn.commit()
+
+            # Verifica títulos marcados para reenvio
+            titulos_reenviar = conn.cursor().execute("""
+                SELECT id FROM titulos WHERE status = 'Cartório' AND status_retorno_cartorio = 'Reenviar'
+            """).fetchall()
+
+            for r in titulos_reenviar:
+                titulo_id = r[0]
+                # Recoloca na fila de cartório
+                existe = conn.cursor().execute(
+                    "SELECT id FROM cartorio_jobs WHERE titulo_id = ? AND status_automacao = 'Pendente'",
+                    (titulo_id,)
+                ).fetchone()
+                if not existe:
+                    conn.cursor().execute(
+                        "INSERT INTO cartorio_jobs (titulo_id, status_automacao) VALUES (?, 'Pendente')",
+                        (titulo_id,)
+                    )
+                    conn.cursor().execute(
+                        "UPDATE titulos SET status_retorno_cartorio = 'Aguardando' WHERE id = ?",
+                        (titulo_id,)
+                    )
+                    conn.commit()
+                    print(f"   🔄 Título ID {titulo_id} reinserido na fila do cartório.")
+
+            conn.close()
+
+        except Exception as e:
+            print(f"   ❌ Erro no acompanhamento de cartório ({cnpj}): {e}")
+
+
 if __name__ == "__main__":
     # Se rodar o arquivo direto, força a execução para teste
     disparar_cobranca_automatica(forcar_execucao=True)
     processar_fila_cartorio()
+    verificar_retorno_cartorio()

@@ -249,9 +249,10 @@ async def receber_webhook_evolution(request: Request):
                             msg_final = f"*Analu (Assistente Virtual) Diz:*\n\n{resp_limpa}"
                             evo_op.enviar_mensagem_texto(ctx["num_cliente"], msg_final)
                             
-                            history_list.append({"role": "user", "text": txt_cliente})
-                            history_list.append({"role": "model", "text": resp_limpa})
-                            _atualizar_sessao(ctx["cnpj"], int(ctx["sess_id"]), history_json=json.dumps(history_list[-20:]), ultima_mensagem_enviada=resp_limpa)
+                            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            history_list.append({"role": "user", "text": txt_cliente, "timestamp": ts})
+                            history_list.append({"role": "model", "text": resp_limpa, "timestamp": ts})
+                            _atualizar_sessao(ctx["cnpj"], int(ctx["sess_id"]), history_json=json.dumps(history_list), ultima_mensagem_enviada=resp_limpa)
                             
                             evo_op.enviar_mensagem_texto(numero_raw, msg_op)
                         except Exception as e:
@@ -344,6 +345,49 @@ async def receber_webhook_evolution(request: Request):
                             evo_op = EvolutionController(config=config_op, nome_empresa_cliente=config_op.get('empresa_nome'))
                             evo_op.enviar_mensagem_texto(numero_raw, f"✅ *Filado!* {len(titulos)} títulos de '{nome_real}' no cartório.")
                     finally: conn_c.close()
+                    return {"status": "ok"}
+
+                # ─── ACOMPANHAMENTO PÓS-CARTÓRIO ────────────────────────────
+                if texto.startswith("CARTORIO_ACATOU_"):
+                    partes = texto.split("_")
+                    cnpj_target = partes[2]
+                    titulo_id = partes[3]
+                    conn_c = conectar(cnpj_target)
+                    conn_c.cursor().execute(
+                        "UPDATE titulos SET status_retorno_cartorio = 'Acatado' WHERE id = ?",
+                        (titulo_id,)
+                    )
+                    conn_c.commit()
+                    conn_c.close()
+                    evo_op.enviar_mensagem_texto(numero_raw, f"✅ Título #{titulo_id} marcado como *Acatado pelo Cartório*! Aguardando protesto formal.")
+                    return {"status": "ok"}
+
+                if texto.startswith("CARTORIO_REENVIAR_"):
+                    partes = texto.split("_")
+                    cnpj_target = partes[2]
+                    titulo_id = partes[3]
+                    conn_c = conectar(cnpj_target)
+                    conn_c.cursor().execute(
+                        "UPDATE titulos SET status_retorno_cartorio = 'Reenviar' WHERE id = ?",
+                        (titulo_id,)
+                    )
+                    conn_c.commit()
+                    conn_c.close()
+                    evo_op.enviar_mensagem_texto(numero_raw, f"🔄 Título #{titulo_id} agendado para *reenvio ao Cartório*! O robô irá tentar novamente no próximo ciclo.")
+                    return {"status": "ok"}
+
+                if texto.startswith("CARTORIO_CANCELAR_"):
+                    partes = texto.split("_")
+                    cnpj_target = partes[2]
+                    titulo_id = partes[3]
+                    conn_c = conectar(cnpj_target)
+                    conn_c.cursor().execute(
+                        "UPDATE titulos SET status = 'Aberto', status_retorno_cartorio = 'N/A', data_envio_cartorio = NULL WHERE id = ?",
+                        (titulo_id,)
+                    )
+                    conn_c.commit()
+                    conn_c.close()
+                    evo_op.enviar_mensagem_texto(numero_raw, f"❌ Título #{titulo_id} *reaberto* e removido do Cartório. Ele aparecerá novamente na fila de cobrança normal.")
                     return {"status": "ok"}
 
                 if texto.startswith("✅ APROVAR_") or texto.startswith("❌ RECUSAR_"):
@@ -467,7 +511,8 @@ async def receber_webhook_evolution(request: Request):
                     return {"status": "ok"}
 
             _log_webhook("Gerando resposta da IA (fluxo financeiro/saudação)...")
-            resp, err = negotiator.gerar_resposta_ia(cliente_nome, texto, info_debito, history_list, intent=intent)
+            # Envia apenas os últimos 20 passos para a IA
+            resp, err = negotiator.gerar_resposta_ia(cliente_nome, texto, info_debito, history_list[-20:], intent=intent)
             if err:
                 _log_webhook(f"Erro ao chamar Gemini: {err}", "ERROR")
                 return {"status": "error"}
@@ -495,9 +540,11 @@ async def receber_webhook_evolution(request: Request):
             msg_final = f"*Analu (Assistente Virtual) Diz:*\n\n{resp_limpa}"
             evo.enviar_mensagem_texto(numero_raw, msg_final)
             
-            history_list.append({"role": "user", "text": texto})
-            history_list.append({"role": "model", "text": resp_limpa})
-            _atualizar_sessao(cnpj, session_id, history_json=json.dumps(history_list[-20:]), ultima_mensagem_enviada=resp_limpa)
+            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            history_list.append({"role": "user", "text": texto, "timestamp": ts})
+            history_list.append({"role": "model", "text": resp_limpa, "timestamp": ts})
+            # Salvar contexto integral para prova/PDF
+            _atualizar_sessao(cnpj, session_id, history_json=json.dumps(history_list), ultima_mensagem_enviada=resp_limpa)
             _log_webhook("Fim do processamento com sucesso.")
             return {"status": "ok"}
 

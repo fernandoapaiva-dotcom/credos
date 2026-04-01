@@ -169,3 +169,29 @@ async def process_voucher(id: int, acao: str, x_company_cnpj: str = Header(...))
     from api.routers.webhook import confirmar_pagamento
     await confirmar_pagamento(id, acao, cnpj)
     return {"success": True, "message": f"Comprovante {id} processado com ação: {acao}"}
+
+# ─── GESTÃO DE CONVERSAS (WhatsApp) ─────────────────────────
+
+@router.get("/conversations")
+def list_conversations(x_company_cnpj: str = Header(...)):
+    cnpj = get_cnpj(x_company_cnpj)
+    from src.database import conectar
+    conn = conectar(cnpj)
+    conn.row_factory = dict_factory
+    try:
+        res = conn.cursor().execute(
+            "SELECT id, numero_whatsapp, cliente_nome, estado, ultima_interacao, ultima_mensagem_enviada, history_json FROM webhook_sessions ORDER BY id DESC"
+        ).fetchall()
+        
+        # Opcional: Processar JSON para não quebrar no frontend
+        import json
+        for row in res:
+            try:
+                row["history"] = json.loads(row["history_json"]) if row["history_json"] else []
+            except Exception:
+                row["history"] = []
+            del row["history_json"]
+            
+        return {"conversations": res}
+    finally:
+        conn.close()
