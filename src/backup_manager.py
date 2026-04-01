@@ -5,20 +5,32 @@ from datetime import datetime
 
 def perform_backup():
     """
-    Realiza o backup dos bancos de dados e logs para a unidade Z: (Google Drive).
+    Realiza o backup dos bancos de dados e logs.
+    Suporta caminho dinâmico via variável de ambiente BACKUP_DIR.
     """
     # Configurações
     source_dir = os.getcwd()
-    dest_base = r"Z:\Credos\Backup"
+    
+    # Prioridade: Env Var -> Z:\ (Windows) -> /app/data/backups (Linux/Docker)
+    dest_base = os.getenv("BACKUP_DIR")
+    if not dest_base:
+        if os.name == 'nt' and os.path.exists(r"Z:"):
+            dest_base = r"Z:\Credos\Backup"
+        else:
+            dest_base = "/app/data/backups"
     
     # Cria pasta com timestamp para o backup atual
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     dest_dir = os.path.join(dest_base, timestamp)
     
     try:
+        # Se for no Docker (/app/data/backups), garante que a pasta pai existe
         if not os.path.exists(dest_base):
-            print(f"Erro: Destino {dest_base} não encontrado.")
-            return False, f"Destino {dest_base} não acessível."
+            try:
+                os.makedirs(dest_base, exist_ok=True)
+            except:
+                print(f"Erro: Destino {dest_base} não encontrado e não pôde ser criado.")
+                return False, f"Destino {dest_base} não acessível."
 
         os.makedirs(dest_dir, exist_ok=True)
         print(f"Iniciando backup em: {dest_dir}")

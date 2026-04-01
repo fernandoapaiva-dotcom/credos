@@ -4,7 +4,8 @@ from api.routers import auth, companies, crm, reports, import_pdf, users, negoti
 from contextlib import asynccontextmanager
 import asyncio
 import schedule
-from src.worker import disparar_cobranca_automatica, processar_fila_cartorio
+from src.worker import disparar_cobranca_automatica, processar_fila_cartorio, verificar_retorno_cartorio
+from src.backup_manager import perform_backup
 
 async def run_schedule():
     while True:
@@ -15,7 +16,9 @@ async def run_schedule():
 async def lifespan(app: FastAPI):
     # Roda o worker de cobrança e agendamentos a cada minuto
     schedule.every().minute.do(disparar_cobranca_automatica)
-    schedule.every().minute.do(processar_fila_cartorio)
+    schedule.every(5).minutes.do(processar_fila_cartorio)
+    schedule.every().day.at("10:00").do(verificar_retorno_cartorio)
+    schedule.every().day.at("12:00").do(perform_backup)
     task = asyncio.create_task(run_schedule())
     yield
     task.cancel()

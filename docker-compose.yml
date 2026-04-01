@@ -57,10 +57,11 @@ services:
     ports:
       - "8001:8001"
     volumes:
-      - .:/app
       - ./data:/app/data
+      - ./backups:/app/data/backups
     environment:
       - DATABASE_DIR=/app/data
+      - BACKUP_DIR=/app/data/backups
       - SERVER_URL=http://evolution:8080
       - AUTHENTICATION_API_KEY=42a24fa6-403d-4c7b-b30a-9359e9a4f783
     env_file:
@@ -89,3 +90,4 @@ networks:
 
 volumes:
   evolution_postgres_data:
+  backups:

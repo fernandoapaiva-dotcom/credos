@@ -1,0 +1,70 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Node.js
+**/node_modules/
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+.eggs/
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Credentials and secrets
+.env
+credentials.json
+token.json
+*.pem
+*.key
+*.pfx
+
+# Application Data & Screenshots
+data/
+backups/
+temp_chrome_profile/
+temp_edge_profile/
+*.db
+*.db-journal
+*.log
+*.png
+*.jpg
+*.jpeg
+*.pdf
+*.zip
+
+# Local scripts
+teste_*.py
+debug_*.py
+inspect_*.py
+ABRIR_*.bat
+INICIAR_*.bat
