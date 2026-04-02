@@ -89,7 +89,17 @@ class EvolutionController:
             payload = {
                 "instanceName": self.instance, 
                 "token": f"token_{self.instance}",
-                "qrcode": True
+                "qrcode": True,
+                "webhook": {
+                    "enabled": True,
+                    "url": "http://credos-backend:8001/api/evolution/webhook",
+                    "webhookByEvents": False,
+                    "webhookBase64": False,
+                    "events": [
+                        "MESSAGES_UPSERT",
+                        "CONNECTION_UPDATE"
+                    ]
+                }
             }
             r = requests.post(endpoint, json=payload, headers=self.headers, timeout=60)
             if r.status_code in [200, 201]: 
