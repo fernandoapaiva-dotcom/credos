@@ -128,7 +128,9 @@ class EvolutionController:
             endpoint = f"{self.url}/message/sendText/{self.instance}"
             payload = {
                 "number": target,
-                "text": mensagem,
+                "textMessage": {
+                    "text": mensagem
+                },
                 "delay": 1200,
                 "linkPreview": False
             }
