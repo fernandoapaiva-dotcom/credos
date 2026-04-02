@@ -41,8 +41,9 @@ services:
       - DATABASE_CONNECTION_URI=postgresql://evolution_user:evolution_password@evolution_db:5432/evolution_db?schema=public
       - DATABASE_CONNECTION_CLIENT_NAME=evolution_v2
       - CACHE_REDIS_ENABLED=true
-      - CACHE_REDIS_HOST=evolution_redis
-      - CACHE_REDIS_PORT=6379
+      - CACHE_REDIS_URI=redis://evolution_redis:6379/6
+      - CACHE_REDIS_PREFIX_KEY=evolution
+      - CACHE_LOCAL_ENABLED=false
       - AUTHENTICATION_TYPE=apikey
       - AUTHENTICATION_API_KEY=42a24fa6-403d-4c7b-b30a-9359e9a4f783
     depends_on:
