@@ -394,7 +394,7 @@ export const Settings: React.FC = () => {
                 
                 {waStatus === 'open' && <div className="text-xl font-bold text-green-600">Conectado e Pronto ✅</div>}
                 {waStatus === 'connecting' && <div className="text-xl font-bold text-amber-500">Aguardando QR Code... ⏳</div>}
-                {waStatus === 'closed' && <div className="text-xl font-bold text-slate-600 dark:text-slate-400">Desconectado ❌</div>}
+                {(waStatus === 'closed' || waStatus === 'disconnected') && <div className="text-xl font-bold text-slate-600 dark:text-slate-400">Desconectado ❌</div>}
                 {waStatus === 'desconhecido' && <div className="text-xl font-bold text-slate-400">Clique para verificar</div>}
                 {waStatus === 'erro_conexao' && <div className="text-xl font-bold text-red-500">Erro na Evolution API</div>}
               </div>
@@ -405,14 +405,14 @@ export const Settings: React.FC = () => {
                   Checar Status
                 </button>
                 
-                {(waStatus === 'open' || waStatus === 'connecting' || waStatus === 'erro_conexao' || waStatus === 'desconhecido') && (
+                {(waStatus === 'open' || waStatus === 'connecting' || waStatus === 'erro_conexao' || waStatus === 'desconhecido' || waStatus === 'disconnected') && (
                   <button onClick={disconnectWa} disabled={waCheckingStatus || waGeneratingQr || waDisconnecting} className="btn-secondary text-red-600 hover:bg-red-50 border-red-200 mt-2 w-full justify-center">
                     {waDisconnecting ? <Loader2 className="animate-spin mr-2" size={18}/> : <PowerOff size={18} className="mr-2"/>}
                     Desconectar (Resetar Sessão)
                   </button>
                 )}
 
-                {(waStatus === 'closed' || waStatus === 'desconhecido' || waStatus === 'erro_conexao') && (
+                {(waStatus === 'closed' || waStatus === 'disconnected' || waStatus === 'desconhecido' || waStatus === 'erro_conexao') && (
                   <button onClick={connectWa} disabled={waCheckingStatus || waGeneratingQr || waDisconnecting} className="btn-primary whitespace-nowrap mt-2 w-full justify-center">
                     {waGeneratingQr ? <Loader2 className="animate-spin mr-2" size={18}/> : <QrCode size={18} className="mr-2"/>}
                     Gerar QR Code
