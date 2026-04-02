@@ -5,7 +5,8 @@ import json
 router = APIRouter()
 
 @router.post("/webhook")
-async def evolution_webhook(request: Request):
+@router.post("/webhook/{sub_path:path}")
+async def evolution_webhook(request: Request, sub_path: str = ""):
     """
     Recebe eventos da Evolution API v2 (QRCODE_UPDATED, CONNECTION_UPDATE).
     Salva o QR Code em arquivo para o frontend buscar.
