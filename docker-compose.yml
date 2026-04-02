@@ -47,8 +47,6 @@ services:
       - AUTHENTICATION_TYPE=apikey
       - AUTHENTICATION_API_KEY=42a24fa6-403d-4c7b-b30a-9359e9a4f783
       # Otimização de Memória (OCI 1GB)
-      - CONFIG_SESSION_PHONE_CLIENT=Credos-OCI
-      - DELAY_MESSAGES=true
       - WEBHOOK_GLOBAL_ENABLED=false
       - CHATWOOT_ENABLED=false
       - TYPEBOT_ENABLED=false
