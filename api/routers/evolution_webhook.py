@@ -27,9 +27,9 @@ async def evolution_webhook(request: Request, sub_path: str = ""):
         os.makedirs(data_dir, exist_ok=True)
         log_file = os.path.join(data_dir, "EVO_DEBUG.txt")
 
-        # Log do evento recebido
+        # Log do evento recebido com payload completo para debug
         with open(log_file, "a") as f:
-            f.write(f"[WEBHOOK] Evento: {event} | Instância: {instance_name}\n")
+            f.write(f"[WEBHOOK] Evento: {event} | Instância: {instance_name} | Payload: {json.dumps(body)[:500]}\n")
 
         # Evento de QR Code gerado
         if event == "QRCODE_UPDATED":
