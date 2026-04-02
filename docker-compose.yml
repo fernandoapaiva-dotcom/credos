@@ -29,7 +29,7 @@ services:
 
   # 3. Evolution API (WhatsApp Engine)
   evolution:
-    image: atendai/evolution-api:v2.1.0
+    image: atendai/evolution-api:v2.2.1
     container_name: evolution_api
     restart: always
     ports:
