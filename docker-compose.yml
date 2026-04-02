@@ -46,6 +46,8 @@ services:
       - CACHE_LOCAL_ENABLED=false
       - AUTHENTICATION_TYPE=apikey
       - AUTHENTICATION_API_KEY=42a24fa6-403d-4c7b-b30a-9359e9a4f783
+      # Corrige o erro de "count: 0" e Loop do WhatsApp Web
+      - CONFIG_SESSION_PHONE_VERSION=2.3000.1023204200
       # Otimização Fixa de Memória do Node.js para OCI (Evita OOM Kill)
       - NODE_OPTIONS=--max_old_space_size=256
       # Desativa Módulos Extras
