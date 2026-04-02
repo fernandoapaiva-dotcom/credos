@@ -75,9 +75,15 @@ class EvolutionController:
                 "instanceName": self.instance, 
                 "token": f"token_{self.instance}",
                 "qrcode": True,
-                "integration": "WHATSAPP-BAILEYS"
+                "integration": "WHATSAPP-BAILEYS",
+                "webhook": {
+                    "url": "http://credos-backend:8001/api/evolution/webhook",
+                    "byEvents": True,
+                    "base64": True,
+                    "events": ["QRCODE_UPDATED", "CONNECTION_UPDATE"]
+                }
             }
-            r = requests.post(endpoint, json=payload, headers=self.headers, timeout=15)
+            r = requests.post(endpoint, json=payload, headers=self.headers, timeout=60)
             if r.status_code in [200, 201]: 
                 return r.json()
             elif r.status_code in [403, 409] and ("already in use" in r.text or "already" in r.text):
@@ -161,32 +167,22 @@ class EvolutionController:
             return False
 
     def buscar_qrcode(self):
-        """Busca o QR Code via polling do /instance/connect (Evolution API v2).
-        A resposta tem formato: {count: N, base64: '...', code: '...'}
-        Quando count > 0, o QR Code está disponível.
-        """
+        """Busca o QR Code via webhook file (Evolution API v2)."""
         if os.name == 'nt': data_dir = r"C:\Antigravity\credos"
         else: data_dir = os.path.join(os.getcwd(), "data")
+        qr_file = os.path.join(data_dir, f"qr_{self.instance}.txt")
         log_file = os.path.join(data_dir, "EVO_DEBUG.txt")
 
         try:
-            endpoint = f"{self.url}/instance/connect/{self.instance}"
-            r = requests.get(endpoint, headers=self.headers, timeout=10)
-            
-            with open(log_file, "a") as f:
-                f.write(f"[{self.instance}] CONNECT Status: {r.status_code} Resp: {r.text[:300]}\n")
-
-            if r.status_code == 200:
-                dados = r.json()
-                # Na v2: {count: N, base64: '...', code: '...'} - count > 0 = QR pronto
-                count = dados.get('count', 0)
-                qr = dados.get('base64') or dados.get('qrcode') or dados.get('code')
-                
-                if count > 0 and qr and isinstance(qr, str) and len(qr) > 50:
-                    if not qr.startswith('data:image'):
-                        qr = f"data:image/png;base64,{qr}"
-                    return qr
+            if os.path.exists(qr_file):
+                age = time.time() - os.path.getmtime(qr_file)
+                if age < 120:
+                    with open(qr_file, "r") as f:
+                        qr = f.read().strip()
+                    if qr and len(qr) > 50:
+                        return qr
+                else:
+                    os.remove(qr_file)
             return None
         except Exception as e:
-            with open(log_file, "a") as f: f.write(f"[{self.instance}] EXCEÇÃO QR: {str(e)}\n")
             return None
