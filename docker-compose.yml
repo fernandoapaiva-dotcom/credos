@@ -46,7 +46,9 @@ services:
       - CACHE_LOCAL_ENABLED=false
       - AUTHENTICATION_TYPE=apikey
       - AUTHENTICATION_API_KEY=42a24fa6-403d-4c7b-b30a-9359e9a4f783
-      # Otimização de Memória (OCI 1GB)
+      # Otimização Fixa de Memória do Node.js para OCI (Evita OOM Kill)
+      - NODE_OPTIONS=--max_old_space_size=256
+      # Desativa Módulos Extras
       - WEBHOOK_GLOBAL_ENABLED=false
       - CHATWOOT_ENABLED=false
       - TYPEBOT_ENABLED=false
