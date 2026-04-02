@@ -74,14 +74,7 @@ class EvolutionController:
             payload = {
                 "instanceName": self.instance, 
                 "token": f"token_{self.instance}",
-                "qrcode": True,
-                "integration": "WHATSAPP-BAILEYS",
-                "webhook": {
-                    "url": "http://credos-backend:8001/api/evolution/webhook",
-                    "byEvents": True,
-                    "base64": True,
-                    "events": ["QRCODE_UPDATED", "CONNECTION_UPDATE"]
-                }
+                "qrcode": True
             }
             r = requests.post(endpoint, json=payload, headers=self.headers, timeout=60)
             if r.status_code in [200, 201]: 
@@ -167,22 +160,30 @@ class EvolutionController:
             return False
 
     def buscar_qrcode(self):
-        """Busca o QR Code via webhook file (Evolution API v2)."""
+        """Busca o QR Code sincronicamente da V1."""
         if os.name == 'nt': data_dir = r"C:\Antigravity\credos"
         else: data_dir = os.path.join(os.getcwd(), "data")
-        qr_file = os.path.join(data_dir, f"qr_{self.instance}.txt")
         log_file = os.path.join(data_dir, "EVO_DEBUG.txt")
 
         try:
-            if os.path.exists(qr_file):
-                age = time.time() - os.path.getmtime(qr_file)
-                if age < 120:
-                    with open(qr_file, "r") as f:
-                        qr = f.read().strip()
-                    if qr and len(qr) > 50:
-                        return qr
-                else:
-                    os.remove(qr_file)
+            endpoint = f"{self.url}/instance/qr?instanceName={self.instance}"
+            r = requests.get(endpoint, headers=self.headers, timeout=10)
+            
+            with open(log_file, "a") as f:
+                f.write(f"[{self.instance}] V1 QR Status: {r.status_code}\n")
+
+            if r.status_code == 200:
+                dados = r.json()
+                qr = dados.get('base64')
+                
+                if qr and isinstance(qr, str) and len(qr) > 50:
+                    if not qr.startswith('data:image'):
+                        qr = f"data:image/png;base64,{qr}"
+                    return qr
+                
+                # Se for só a string direta { "qrcode": "..." } ou erro count
+                # ignorar. A V1 manda no base64
+            
             return None
         except Exception as e:
             return None
