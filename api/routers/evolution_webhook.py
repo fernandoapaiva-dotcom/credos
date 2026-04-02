@@ -31,11 +31,12 @@ async def evolution_webhook(request: Request, sub_path: str = ""):
         with open(log_file, "a") as f:
             f.write(f"[WEBHOOK] Evento: {event} | Instância: {instance_name} | Payload: {json.dumps(body)[:500]}\n")
 
-        # Evento de QR Code gerado
-        if event == "QRCODE_UPDATED":
-            qr_base64 = data.get("qrcode", {}).get("base64") or data.get("base64", "")
+        if event == "QRCODE_UPDATED" or "qr" in event.lower() or "base64" in data or "qrcode" in data:
+            qr_base64 = data.get("qrcode", {}).get("base64") if isinstance(data.get("qrcode"), dict) else data.get("qrcode")
+            if not qr_base64:
+                qr_base64 = data.get("base64", "")
             
-            if qr_base64:
+            if qr_base64 and isinstance(qr_base64, str) and len(qr_base64) > 50:
                 # Garantir formato correto
                 if not qr_base64.startswith("data:image"):
                     qr_base64 = f"data:image/png;base64,{qr_base64}"
@@ -48,13 +49,13 @@ async def evolution_webhook(request: Request, sub_path: str = ""):
                 with open(log_file, "a") as f:
                     f.write(f"[WEBHOOK] QR Code salvo para instância: {instance_name} ({len(qr_base64)} chars)\n")
 
-        # Evento de status de conexão
-        elif event == "CONNECTION_UPDATE":
-            status = data.get("state", "")
+        # Evento de status de conexão independente do QR
+        if event == "CONNECTION_UPDATE" or "connection" in event.lower():
+            status = data.get("state", "") or data.get("status", "")
             with open(log_file, "a") as f:
                 f.write(f"[WEBHOOK] Status de conexão: {status} para {instance_name}\n")
             
-            # Se conectou, apagar QR Code antigo
+            # Se conectou de fato, apagar QR Code antigo
             if status == "open":
                 qr_file = os.path.join(data_dir, f"qr_{instance_name}.txt")
                 if os.path.exists(qr_file):
