@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from api.routers import auth, companies, crm, reports, import_pdf, users, negotiation, cartorio, webhook
+from api.routers import auth, companies, crm, reports, import_pdf, users, negotiation, cartorio, webhook, evolution_webhook
 from contextlib import asynccontextmanager
 import asyncio
 import schedule
@@ -45,7 +45,7 @@ app.include_router(import_pdf.router, prefix="/api/import", tags=["Import PDF"])
 app.include_router(negotiation.router, prefix="/api/negotiation", tags=["AI Negotiation"])
 app.include_router(cartorio.router, prefix="/api/cartorio", tags=["Cartorio Automation"])
 app.include_router(webhook.router, prefix="/api/webhook", tags=["WhatsApp Webhook"])
-app.include_router(webhook.router, prefix="/api/evolution", tags=["Legacy Webhook Router"])
+app.include_router(evolution_webhook.router, prefix="/api/evolution", tags=["Evolution API Webhook"])
 
 @app.get("/")
 def read_root():

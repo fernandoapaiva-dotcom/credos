@@ -2,6 +2,7 @@ import requests
 import base64
 import os
 import mimetypes
+import time
 
 class EvolutionController:
     def __init__(self, config=None, nome_empresa_cliente=None):
@@ -70,16 +71,27 @@ class EvolutionController:
     def criar_instancia(self):
         try:
             endpoint = f"{self.url}/instance/create"
+            # Na Evolution API v2, o QR Code é enviado via Webhook, não por polling.
+            # Configuramos o webhook para o nosso próprio backend receber o código.
             payload = {
                 "instanceName": self.instance, 
                 "token": f"token_{self.instance}",
                 "qrcode": True,
-                "integration": "WHATSAPP-BAILEYS"
+                "integration": "WHATSAPP-BAILEYS",
+                "webhook": {
+                    "url": "http://credos-backend:8001/api/evolution/webhook",
+                    "byEvents": True,
+                    "base64": True,
+                    "events": ["QRCODE_UPDATED", "CONNECTION_UPDATE"]
+                }
             }
             r = requests.post(endpoint, json=payload, headers=self.headers, timeout=10)
             if r.status_code in [200, 201]: 
                 return r.json()
             elif r.status_code == 403 and "already in use" in r.text:
+                return {"message": "already exists"}
+            # Se já existe (409), também é OK
+            elif r.status_code == 409:
                 return {"message": "already exists"}
             else:
                 self.debug_log("Erro ao Criar", endpoint, r)
@@ -160,33 +172,27 @@ class EvolutionController:
             return False
 
     def buscar_qrcode(self):
-        # Caminho dinâmico para logs (compatível Linux/Windows)
-        if os.name == 'nt': log_dir = r"C:\Antigravity\credos"
-        else: log_dir = os.path.join(os.getcwd(), "data")
-        log_file = os.path.join(log_dir, "EVO_DEBUG.txt")
+        # Na Evolution API v2, o QR Code é enviado via Webhook.
+        # Lemos o arquivo onde o webhook salvou o código.
+        if os.name == 'nt': data_dir = r"C:\Antigravity\credos"
+        else: data_dir = os.path.join(os.getcwd(), "data")
+        
+        qr_file = os.path.join(data_dir, f"qr_{self.instance}.txt")
+        log_file = os.path.join(data_dir, "EVO_DEBUG.txt")
 
         try:
-            endpoint = f"{self.url}/instance/connect/{self.instance}"
-            r = requests.get(endpoint, headers=self.headers, timeout=15)
-            
-            # LOG PARA DEBUG
-            with open(log_file, "a") as f: 
-                f.write(f"[{self.instance}] BUSCAR_QR Status: {r.status_code} Resposta: {r.text[:500]}\n")
-
-            if r.status_code == 200:
-                dados = r.json()
-                # Tenta extrair de várias formas possíveis (v1, v2, nested)
-                qr = None
-                if isinstance(dados, dict):
-                    qr = dados.get('base64') or dados.get('qrcode') or dados.get('code')
-                    if not qr and 'instance' in dados: # Possibilidade de estar dentro de instance
-                        qr = dados['instance'].get('base64') or dados['instance'].get('qrcode')
-
-                if qr and isinstance(qr, str):
-                    if ',' in qr: qr = max(qr.split(','), key=len)
-                    if not qr.startswith('data:image') and len(qr) > 100:
-                        qr = f"data:image/png;base64,{qr}"
-                    return qr
+            if os.path.exists(qr_file):
+                # Verificar se o arquivo não está muito antigo (max 60 segundos)
+                age = time.time() - os.path.getmtime(qr_file)
+                if age < 60:
+                    with open(qr_file, "r") as f:
+                        qr = f.read().strip()
+                    if qr and len(qr) > 50:
+                        with open(log_file, "a") as f: f.write(f"[{self.instance}] QR lido do arquivo (idade: {age:.0f}s)\n")
+                        return qr
+                else:
+                    with open(log_file, "a") as f: f.write(f"[{self.instance}] QR expirado ({age:.0f}s), aguardando novo...\n")
+                    os.remove(qr_file)  # Remover QR expirado
             return None
         except Exception as e:
             with open(log_file, "a") as f: f.write(f"[{self.instance}] EXCEÇÃO QR: {str(e)}\n")
