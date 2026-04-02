@@ -1,5 +1,5 @@
-# Use an official Python runtime as a parent image
-FROM python:3.12-slim
+# Use the official Microsoft Playwright image for Python (much more stable for production)
+FROM mcr.microsoft.com/playwright/python:v1.49.1-jammy
 
 # Set the working directory in the container
 WORKDIR /app
@@ -18,8 +18,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Playwright and its dependencies
-RUN playwright install --with-deps chromium
+# Ensure chromium is available for the robot
+RUN playwright install chromium
 
 # Copy the rest of the application code
 COPY . .
