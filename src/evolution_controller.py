@@ -160,12 +160,28 @@ class EvolutionController:
             return False
 
     def buscar_qrcode(self):
+        # Caminho dinâmico para logs (compatível Linux/Windows)
+        if os.name == 'nt': log_dir = r"C:\Antigravity\credos"
+        else: log_dir = os.path.join(os.getcwd(), "data")
+        log_file = os.path.join(log_dir, "EVO_DEBUG.txt")
+
         try:
             endpoint = f"{self.url}/instance/connect/{self.instance}"
             r = requests.get(endpoint, headers=self.headers, timeout=15)
+            
+            # LOG PARA DEBUG
+            with open(log_file, "a") as f: 
+                f.write(f"[{self.instance}] BUSCAR_QR Status: {r.status_code} Resposta: {r.text[:500]}\n")
+
             if r.status_code == 200:
                 dados = r.json()
-                qr = dados.get('base64') or dados.get('qrcode') or dados.get('code')
+                # Tenta extrair de várias formas possíveis (v1, v2, nested)
+                qr = None
+                if isinstance(dados, dict):
+                    qr = dados.get('base64') or dados.get('qrcode') or dados.get('code')
+                    if not qr and 'instance' in dados: # Possibilidade de estar dentro de instance
+                        qr = dados['instance'].get('base64') or dados['instance'].get('qrcode')
+
                 if qr and isinstance(qr, str):
                     if ',' in qr: qr = max(qr.split(','), key=len)
                     if not qr.startswith('data:image') and len(qr) > 100:
@@ -173,5 +189,5 @@ class EvolutionController:
                     return qr
             return None
         except Exception as e:
-            print(f"Erro Crítico ao buscar QR: {e}")
+            with open(log_file, "a") as f: f.write(f"[{self.instance}] EXCEÇÃO QR: {str(e)}\n")
             return None
