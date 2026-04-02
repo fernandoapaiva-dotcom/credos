@@ -18,9 +18,18 @@ class EvolutionController:
             
         self.apikey = key_raw.strip()
         
-        # Dinamismo para Multi-tenant
+        # Dinamismo para Multi-tenant: Limpeza rigorosa para bater com o padrão de criação (CNPJ numérico)
         inst_raw = nome_empresa_cliente or os.getenv('INSTANCE_NAME') or "Credos_SaaS"
-        self.instance = inst_raw.strip().replace(" ", "_").lower()
+        self.instance = str(inst_raw).strip().replace(".", "").replace("-", "").replace("/", "").replace(" ", "").lower()
+        
+        # Log da configuração inicial para diagnóstico
+        if not os.path.exists('/.dockerenv') or True: # Logar sempre no início do debug
+             if os.name == 'nt': log_dir = r"C:\Antigravity\credos"
+             else: log_dir = os.path.join(os.getcwd(), "data")
+             log_file = os.path.join(log_dir, "EVO_DEBUG.txt")
+             if os.path.exists(log_dir):
+                 with open(log_file, "a") as f:
+                     f.write(f"--- [INIT] Instância: {self.instance} | URL: {self.url} ---\n")
         
         self.headers = {
             "apikey": self.apikey,
