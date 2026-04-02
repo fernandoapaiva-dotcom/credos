@@ -35,7 +35,15 @@ class EvolutionController:
         print("-" * 40 + "\n")
 
     def checar_status(self):
-        log_file = r"C:\Antigravity\credos\EVO_DEBUG.txt"
+        # Caminho dinâmico para logs (compatível Linux/Windows)
+        if os.name == 'nt':
+            log_dir = r"C:\Antigravity\credos"
+        else:
+            log_dir = os.path.join(os.getcwd(), "data")
+        
+        os.makedirs(log_dir, exist_ok=True)
+        log_file = os.path.join(log_dir, "EVO_DEBUG.txt")
+        
         try:
             if not self.url or not self.apikey: 
                 with open(log_file, "a") as f: f.write(f"[{self.instance}] Erro: URL ou Key ausente. URL='{self.url}' Key='{self.apikey}'\n")
