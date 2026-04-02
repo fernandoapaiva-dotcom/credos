@@ -166,7 +166,7 @@ class EvolutionController:
         log_file = os.path.join(data_dir, "EVO_DEBUG.txt")
 
         try:
-            endpoint = f"{self.url}/instance/qr?instanceName={self.instance}"
+            endpoint = f"{self.url}/instance/connect/{self.instance}"
             r = requests.get(endpoint, headers=self.headers, timeout=10)
             
             with open(log_file, "a") as f:
@@ -174,7 +174,7 @@ class EvolutionController:
 
             if r.status_code == 200:
                 dados = r.json()
-                qr = dados.get('base64')
+                qr = dados.get('base64') or dados.get('qrcode', {}).get('base64')
                 
                 if qr and isinstance(qr, str) and len(qr) > 50:
                     if not qr.startswith('data:image'):
