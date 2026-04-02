@@ -92,7 +92,7 @@ class EvolutionController:
                 "qrcode": True,
                 "webhook": {
                     "enabled": True,
-                    "url": "http://credos-backend:8001/api/evolution/webhook",
+                    "url": "http://credos-backend:8001/api/webhook/evolution",
                     "webhookByEvents": False,
                     "webhookBase64": False,
                     "events": [
