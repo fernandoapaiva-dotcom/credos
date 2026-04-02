@@ -37,8 +37,9 @@ services:
     environment:
       - SERVER_PORT=8080
       - DATABASE_ENABLED=true
-      - DATABASE_CONNECTION_TYPE=postgresql
+      - DATABASE_PROVIDER=postgresql
       - DATABASE_CONNECTION_URI=postgresql://evolution_user:evolution_password@evolution_db:5432/evolution_db?schema=public
+      - DATABASE_CONNECTION_CLIENT_NAME=evolution_v2
       - CACHE_REDIS_ENABLED=true
       - CACHE_REDIS_HOST=evolution_redis
       - CACHE_REDIS_PORT=6379
