@@ -71,27 +71,16 @@ class EvolutionController:
     def criar_instancia(self):
         try:
             endpoint = f"{self.url}/instance/create"
-            # Na Evolution API v2, o QR Code é enviado via Webhook, não por polling.
-            # Configuramos o webhook para o nosso próprio backend receber o código.
             payload = {
                 "instanceName": self.instance, 
                 "token": f"token_{self.instance}",
                 "qrcode": True,
-                "integration": "WHATSAPP-BAILEYS",
-                "webhook": {
-                    "url": "http://credos-backend:8001/api/evolution/webhook",
-                    "byEvents": True,
-                    "base64": True,
-                    "events": ["QRCODE_UPDATED", "CONNECTION_UPDATE"]
-                }
+                "integration": "WHATSAPP-BAILEYS"
             }
-            r = requests.post(endpoint, json=payload, headers=self.headers, timeout=30)
+            r = requests.post(endpoint, json=payload, headers=self.headers, timeout=15)
             if r.status_code in [200, 201]: 
                 return r.json()
-            elif r.status_code == 403 and "already in use" in r.text:
-                return {"message": "already exists"}
-            # Se já existe (409), também é OK
-            elif r.status_code == 409:
+            elif r.status_code in [403, 409] and ("already in use" in r.text or "already" in r.text):
                 return {"message": "already exists"}
             else:
                 self.debug_log("Erro ao Criar", endpoint, r)
@@ -172,27 +161,31 @@ class EvolutionController:
             return False
 
     def buscar_qrcode(self):
-        # Na Evolution API v2, o QR Code é enviado via Webhook.
-        # Lemos o arquivo onde o webhook salvou o código.
+        """Busca o QR Code via polling do /instance/connect (Evolution API v2).
+        A resposta tem formato: {count: N, base64: '...', code: '...'}
+        Quando count > 0, o QR Code está disponível.
+        """
         if os.name == 'nt': data_dir = r"C:\Antigravity\credos"
         else: data_dir = os.path.join(os.getcwd(), "data")
-        
-        qr_file = os.path.join(data_dir, f"qr_{self.instance}.txt")
         log_file = os.path.join(data_dir, "EVO_DEBUG.txt")
 
         try:
-            if os.path.exists(qr_file):
-                # Verificar se o arquivo não está muito antigo (max 60 segundos)
-                age = time.time() - os.path.getmtime(qr_file)
-                if age < 60:
-                    with open(qr_file, "r") as f:
-                        qr = f.read().strip()
-                    if qr and len(qr) > 50:
-                        with open(log_file, "a") as f: f.write(f"[{self.instance}] QR lido do arquivo (idade: {age:.0f}s)\n")
-                        return qr
-                else:
-                    with open(log_file, "a") as f: f.write(f"[{self.instance}] QR expirado ({age:.0f}s), aguardando novo...\n")
-                    os.remove(qr_file)  # Remover QR expirado
+            endpoint = f"{self.url}/instance/connect/{self.instance}"
+            r = requests.get(endpoint, headers=self.headers, timeout=10)
+            
+            with open(log_file, "a") as f:
+                f.write(f"[{self.instance}] CONNECT Status: {r.status_code} Resp: {r.text[:300]}\n")
+
+            if r.status_code == 200:
+                dados = r.json()
+                # Na v2: {count: N, base64: '...', code: '...'} - count > 0 = QR pronto
+                count = dados.get('count', 0)
+                qr = dados.get('base64') or dados.get('qrcode') or dados.get('code')
+                
+                if count > 0 and qr and isinstance(qr, str) and len(qr) > 50:
+                    if not qr.startswith('data:image'):
+                        qr = f"data:image/png;base64,{qr}"
+                    return qr
             return None
         except Exception as e:
             with open(log_file, "a") as f: f.write(f"[{self.instance}] EXCEÇÃO QR: {str(e)}\n")
