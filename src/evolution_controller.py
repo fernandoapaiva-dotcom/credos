@@ -85,7 +85,7 @@ class EvolutionController:
                     "events": ["QRCODE_UPDATED", "CONNECTION_UPDATE"]
                 }
             }
-            r = requests.post(endpoint, json=payload, headers=self.headers, timeout=10)
+            r = requests.post(endpoint, json=payload, headers=self.headers, timeout=30)
             if r.status_code in [200, 201]: 
                 return r.json()
             elif r.status_code == 403 and "already in use" in r.text:
