@@ -46,26 +46,32 @@ class EvolutionController:
         log_file = os.path.join(log_dir, "EVO_DEBUG.txt")
         
         try:
+            # Auto-correção: se estiver rodando no Docker e usar localhost, muda para 'evolution'
+            if 'localhost' in self.url and os.path.exists('/.dockerenv'):
+                self.url = self.url.replace('localhost', 'evolution')
+                with open(log_file, "a") as f: f.write(f"[{self.instance}] Auto-corrigindo URL para: {self.url}\n")
+
             if not self.url or not self.apikey: 
                 with open(log_file, "a") as f: f.write(f"[{self.instance}] Erro: URL ou Key ausente. URL='{self.url}' Key='{self.apikey}'\n")
                 return "config_error"
             
             endpoint = f"{self.url}/instance/connectionState/{self.instance}"
-            with open(log_file, "a") as f: f.write(f"[{self.instance}] Checando: {endpoint}\n")
-            
+            # ... rest of check logic remains but with self.url updated
             r = requests.get(endpoint, headers=self.headers, timeout=10)
             
             with open(log_file, "a") as f: f.write(f"[{self.instance}] Resposta {r.status_code}: {r.text[:200]}\n")
             
             if r.status_code == 200:
-                state = r.json().get("instance", {}).get("state") or "disconnected"
+                # Na V1 o json varia: pode ser { "instance": { "state": "..." } } ou { "state": "..." }
+                dados = r.json()
+                state = dados.get("instance", {}).get("state") or dados.get("state") or "disconnected"
                 return state
             elif r.status_code == 404:
                 return "disconnected"
             
             return "error"
         except Exception as e:
-            with open(log_file, "a") as f: f.write(f"[{self.instance}] EXCEÇÃO: {str(e)}\n")
+            with open(log_file, "a") as f: f.write(f"[{self.instance}] EXCEÇÃO Status: {str(e)}\n")
             return "error"
 
     def criar_instancia(self):
@@ -101,9 +107,15 @@ class EvolutionController:
     def enviar_mensagem_texto(self, numero, mensagem):
         try:
             if not self.url or not self.apikey: return False
+            
+            # Auto-correção URL
+            if 'localhost' in self.url and os.path.exists('/.dockerenv'):
+                self.url = self.url.replace('localhost', 'evolution')
+
             target = "".join(filter(str.isdigit, str(numero)))
             if not target: return False
             if len(target) <= 11: target = "55" + target
+            
             endpoint = f"{self.url}/message/sendText/{self.instance}"
             payload = {
                 "number": target,
@@ -111,11 +123,28 @@ class EvolutionController:
                 "delay": 1200,
                 "linkPreview": False
             }
-            r = requests.post(endpoint, json=payload, headers=self.headers)
+            r = requests.post(endpoint, json=payload, headers=self.headers, timeout=20)
+            
             if r.status_code not in [200, 201]:
                 self.debug_log("FALHA ENVIO TEXTO", endpoint, r, payload)
                 return False
+            
+            # Log de sucesso para debug
+            if os.name == 'nt': log_dir = r"C:\Antigravity\credos"
+            else: log_dir = os.path.join(os.getcwd(), "data")
+            log_file = os.path.join(log_dir, "EVO_DEBUG.txt")
+            with open(log_file, "a") as f:
+                f.write(f"[{self.instance}] MENSAGEM ENVIADA para {target}: {mensagem[:50]}...\n")
+                
             return True
+        except Exception as e:
+            # Registrar exceção no log
+            if os.name == 'nt': log_dir = r"C:\Antigravity\credos"
+            else: log_dir = os.path.join(os.getcwd(), "data")
+            log_file = os.path.join(log_dir, "EVO_DEBUG.txt")
+            with open(log_file, "a") as f:
+                f.write(f"[{self.instance}] EXCEÇÃO Envio Texto: {str(e)}\n")
+            return False
         except Exception as e:
             print(f"Erro Crítico WhatsApp Texto: {e}")
             return False
