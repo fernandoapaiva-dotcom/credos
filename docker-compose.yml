@@ -29,7 +29,7 @@ services:
 
   # 3. Evolution API (WhatsApp Engine)
   evolution:
-    image: atendai/evolution-api:v2.1.1
+    image: atendai/evolution-api:v2.1.0
     container_name: evolution_api
     restart: always
     ports:
@@ -53,6 +53,9 @@ services:
       - CHATWOOT_ENABLED=false
       - TYPEBOT_ENABLED=false
       - FACEBOOK_ENABLED=false
+      - DATABASE_SAVE_DATA_INSTANCE=true
+      - DATABASE_SAVE_DATA_NEW_MESSAGE=false
+      - DATABASE_SAVE_MESSAGE_JWID=false
     depends_on:
       - evolution_db
       - evolution_redis
