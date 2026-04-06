@@ -130,13 +130,13 @@ class MailScanner:
 
         if not cliente_ok:
             if not texto:
-                print(f"   ❌ Arquivo Ilegível e sem Evidências de Cliente: {os.path.basename(filepath)}. DESCARTADO POR SEGURANÇA.")
+                print(f"   ❌ Arquivo Ilegível e sem Evidências de Cliente: {os.path.basename(filepath)}. DESCARTADO POR SEGURANÇA.", flush=True)
             else:
-                print(f"   ❌ Arquivo descartado: Faltam evidências de que pertence a '{nome_curto}'.")
+                print(f"   ❌ Arquivo descartado: Faltam evidências de que pertence a '{nome_curto}'.", flush=True)
             return False
         
         if not texto:
-            print(f"   ⚠️ PDF sem texto, MAS o nome do arquivo identifica o cliente ('{nome_curto}'). APROVADO: {os.path.basename(filepath)}.")
+            print(f"   ⚠️ PDF sem texto, MAS o nome do arquivo identifica o cliente ('{nome_curto}'). APROVADO: {os.path.basename(filepath)}.", flush=True)
             return True
 
         # 2. Se o cliente está no documento, agora validamos o MÉRITO (é dessa dívida?)
@@ -146,24 +146,24 @@ class MailScanner:
             nf_search = str(nf_alvo)
             # Verifica no texto com margem (ex: NFe 1237 ou similar), evitando números aleatórios gigantes
             if re.search(rf'\b0*{nf_search}\b', texto) or f" {nf_search} " in fname_limpo.replace('-', ' ').replace('_', ' '):
-                print(f"   ✅ Arquivo Válido: Cliente e NF confirmados.")
+                print(f"   ✅ Arquivo Válido: Cliente e NF confirmados.", flush=True)
                 return True
             
         # Prova B: Valor exato
         if valor_alvo:
             valor_str = f"{valor_alvo:,.2f}".replace('.', '#').replace(',', '.').replace('#', ',')
             if valor_str in texto or f"{valor_alvo:.2f}" in texto:
-                print(f"   ✅ Arquivo Válido: Cliente e Valor financeiro confirmados.")
+                print(f"   ✅ Arquivo Válido: Cliente e Valor financeiro confirmados.", flush=True)
                 return True
 
         # Prova C: Data de vencimento
         if vencimento_alvo:
             venc_fmt = str(vencimento_alvo).replace('-', '/').replace('.', '/')
             if venc_fmt in texto or vencimento_alvo in texto:
-                print(f"   ✅ Arquivo Válido: Cliente e Vencimento confirmados.")
+                print(f"   ✅ Arquivo Válido: Cliente e Vencimento confirmados.", flush=True)
                 return True
 
-        print(f"   ❌ Arquivo descartado: Cliente achado, mas não referencia esta NF/Dívida específica.")
+        print(f"   ❌ Arquivo descartado: Cliente achado, mas não referencia esta NF/Dívida específica.", flush=True)
         return False
 
     def baixar_anexos_por_nf_validado(self, numero_nf, cnpj_cliente, nome_cliente, vencimento=None, valor=None):
