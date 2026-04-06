@@ -219,9 +219,16 @@ class EvolutionController:
     def enviar_midia_b64(self, numero, b64, mimetype, filename="arquivo"):
         try:
             if not self.url or not self.apikey: return False
-            target = "".join(filter(str.isdigit, str(numero)))
-            if not target: return False
-            if len(target) <= 11: target = "55" + target
+            
+            # Se o número já vier com @ (ex: @lid ou @s.whatsapp.net), use como JID direto
+            if "@" in str(numero):
+                target = str(numero)
+            else:
+                target = "".join(filter(str.isdigit, str(numero)))
+                if not target: return False
+                if len(target) <= 11: target = "55" + target
+                if "@" not in target: target += "@s.whatsapp.net"
+            
             endpoint = f"{self.url}/message/sendMedia/{self.instance}"
             mediatype = "document"
             if "image" in mimetype: mediatype = "image"

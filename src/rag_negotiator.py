@@ -219,6 +219,7 @@ class RAGNegotiator:
                 "conduza para resolver a pendência financeira. Seja empática mas firme. "
                 "Se o cliente der data de pagamento: |||ACAO: ACORDO_ALCANCADO: DATA|||. "
                 "Se pedir PIX: informe. Se pedir boleto: |||ACAO: ENVIAR_BOLETOS|||. "
+                "Se pedir a Nota Fiscal (NF) ou segunda via: |||ACAO: BUSCAR_NF_EMAIL|||. "
                 "Esses marcadores NÃO aparecem para o cliente."
             )
         

@@ -4,6 +4,7 @@ from src.rag_negotiator import RAGNegotiator
 from src.evolution_controller import EvolutionController
 from src.manager import Manager
 from src.cartorio_automation import CartorioAutomation
+from src.mail_scanner import MailScanner
 from datetime import datetime
 import base64
 import asyncio
@@ -102,17 +103,17 @@ def _encontrar_empresa_por_numero(numero: str):
             ).fetchone()
             if cli:
                 _log_webhook(f"Cliente '{cli['nome']}' encontrado na empresa {u['empresa_nome']} (CNPJ: {cnpj})")
-                return cnpj, cli['nome']
+                return cnpj, cli['nome'], cli['cnpj']
         finally:
             conn.close()
     
     # 🚨 OVERRIDE DE SEGURANÇA PARA HOMOLOGAÇÃO (FERNANDO/TECAR)
     if "198440541790321" in str(numero_limpo) or "61998334833" in str(numero_limpo):
         _log_webhook("🏁 MASTER OVERRIDE: Fernando identificado pelo ID/Número. Forçando TECAR BRASILIA.")
-        return "54804458000122", "TECAR BRASILIA VEICULOS E SERV"
+        return "54804458000122", "TECAR BRASILIA VEICULOS E SERV", "54804458000122"
 
     _log_webhook(f"Nenhum cliente encontrado para o número {numero_limpo} em nenhuma empresa.")
-    return None, None
+    return None, None, None
 
 def _obter_sessao_ativa(cnpj, numero):
     conn = conectar(cnpj)
@@ -462,7 +463,7 @@ async def receber_webhook_evolution(request: Request):
                     return {"status": "ok"}
 
         # ─── 2. SE NÃO É OPERADOR, É CLIENTE ─────────────────────────
-        cnpj, cliente_nome = _encontrar_empresa_por_numero(numero_raw)
+        cnpj, cliente_nome, cliente_cnpj = _encontrar_empresa_por_numero(numero_raw)
         if not cnpj: 
             _log_webhook(f"Ignorando sender desconhecido: {numero_raw} (Considere cadastrar este número no CRM)")
             return {"status": "ignored", "reason": "unknown_sender"}
@@ -590,6 +591,36 @@ async def receber_webhook_evolution(request: Request):
             if "[AÇÃO: SOLICITAR_LINK_CARTAO]" in resp:
                 _log_webhook("Ação detectada: SOLICITAR_LINK_CARTAO")
                 # Futura lógica de geração de link aqui
+            
+            if "[AÇÃO: BUSCAR_NF_EMAIL]" in resp:
+                _log_webhook("🏁 Ação detectada: BUSCAR_NF_EMAIL")
+                try:
+                    scanner = MailScanner(config)
+                    # Busca todos os títulos em aberto para e-mail
+                    encontrados = 0
+                    for it in info_debito.get('itens', []):
+                        nf_num = it['numero_nf']
+                        _log_webhook(f"Buscando NF {nf_num} no e-mail base (Venc: {it['vencimento']})...")
+                        arquivos = scanner.baixar_anexos_por_nf_validado(
+                            nf_num, 
+                            cliente_cnpj,
+                            cliente_nome,
+                            vencimento=it['vencimento'],
+                            valor=it['total']
+                        )
+                        if arquivos:
+                            for arq in arquivos:
+                                if arq.lower().endswith('.pdf'):
+                                    _log_webhook(f"PDF encontrado: {os.path.basename(arq)}. Enviando...")
+                                    evo.enviar_midia(remote_jid, arq)
+                                    encontrados += 1
+                        else:
+                            _log_webhook(f"NF {nf_num} não encontrada.")
+                    
+                    if encontrados == 0:
+                        _log_webhook("Nenhuma NF encontrada. Notificando cliente humanamente (IA já agirá conforme script).")
+                except Exception as e:
+                    _log_webhook(f"Erro fatal na busca de email: {e}", "ERROR")
             
             # LIMPAR todas as tags internas — cliente NUNCA deve ver [AÇÃO:...] ou [Bebot:...]
             resp_limpa = re.sub(r'\[AÇÃO:[^\]]*\]', '', resp).strip()
