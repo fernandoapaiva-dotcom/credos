@@ -154,23 +154,22 @@ class RAGNegotiator:
             "\n- Fazer o cliente se sentir bem atendido."
             "\n- Gradualmente, quando a conversa permitir, abordar a pendência financeira em aberto."
             "\n- Conduzir para um acordo de pagamento de forma leve, sem pressão excessiva."
-            "\n\nREGRAS DO QUE NUNCA FAZER:"
-            "\n- NUNCA mencione a dívida na primeira mensagem de um primeiro contato."
-            "\n- NUNCA despeje NF, valor, dias de atraso tudo junto de uma vez."
-            "\n- NUNCA use termos como [AÇÃO:], [Bebot:] ou marcadores técnicos na conversa."
+            "\n- Sempre mencione o valor total da pendência quando o assunto for cobrança."
             "\n- Se precisar registrar uma ação interna, use |||ACAO: NOME||| apenas no final da mensagem — nunca no corpo."
+            "\n- **VOCÊ PODE ENVIAR ARQUIVOS (PDF/DOC) PELO WHATSAPP.** Se o cliente pedir nota fiscal ou boleto, diga que está enviando e use o comando |||ACAO: BUSCAR_NF_EMAIL||| ou |||ACAO: ENVIAR_BOLETOS|||."
+            "\n- NUNCA diga que não consegue enviar arquivos por aqui. Você consegue."
         )
 
         # ─── PROMPT DO MOMENTO ─────────────────────────────────────────────────
         if intent == 'saudacao':
-            # SAUDAÇÃO PURA — apenas cumprimentar de volta, ignorar histórico de dívida aqui
+            # SAUDAÇÃO PURA — apenas cumprimentar de volta de forma natural
             prompt = (
                 f"{hist_text}"
                 f"Mensagem do cliente: \"{mensagem_cliente}\"\n\n"
                 "INSTRUÇÃO: O cliente mandou apenas uma saudação curta ('Oi', 'Bom dia', etc). "
-                "Responda EXCLUSIVAMENTE cumprimentando ele de volta, de forma calorosa e natural. "
-                "Pergunte como pode ajudar. "
-                "NÃO FAÇA NENHUMA MENÇÃO a valores, dívidas, notas fiscais, PIX ou boletos. Apenas cumprimente."
+                "Responda cumprimentando de volta de forma natural. Se a conversa já estiver em andamento, responda de acordo com o contexto anterior. "
+                "Resgate o assunto da dívida apenas se o cliente perguntar ou se houver abertura. "
+                "Apenas cumprimente de forma humana."
             )
         elif num_trocas == 0:
             # PRIMEIRO CONTATO — apenas cumprimentar, absolutamente nada de dívida

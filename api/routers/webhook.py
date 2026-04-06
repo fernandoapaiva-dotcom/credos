@@ -512,16 +512,8 @@ async def receber_webhook_evolution(request: Request):
         if texto:
             _log_webhook("Mensagem de texto recebida. Classificando intenção...")
             
-            # Saudações simples: a IA responde naturalmente, sem pivot nem notificação ao operador
-            eh_saudacao = len(texto.strip().split()) <= 3 and not any(
-                p in texto.lower() for p in ['pagar', 'boleto', 'pix', 'dívida', 'valor', 'vencimento', 'nota']
-            )
-            
-            if eh_saudacao:
-                intent = 'saudacao'  # Trata como saudação para a IA não mencionar dívida de jeito nenhum
-                _log_webhook("Saudação simples detectada — IA responde naturalmente sem notificar operador.")
-            else:
-                intent = negotiator.classificar_intencao_concierge(texto)
+            # Deixa a IA classificar a intenção de forma inteligente
+            intent = negotiator.classificar_intencao_concierge(texto)
                 
             if intent == 'nao_financeiro' and sessao and sessao.get('estado') == 'analu_assumiu_suporte':
                 intent = 'suporte_para_financeiro'
