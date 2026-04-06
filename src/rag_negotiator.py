@@ -211,14 +211,24 @@ class RAGNegotiator:
                 f"Débito em aberto: R$ {total:.2f} ({dias_max_atraso} dias de atraso)\n"
                 f"{titulos_str}"
                 f"{pix_info}\n\n"
-                "INSTRUÇÃO: A conversa já está fluindo. Responda ao que foi dito e, de forma natural, "
-                "conduza para resolver a pendência financeira. Seja empática mas firme. "
+                "INSTRUÇÃO: Responda ao que foi dito de forma fluida e natural. "
+                "Caso contrário, conduza gentilmente para a resolução do débito. "
                 "Se o cliente der data de pagamento: |||ACAO: ACORDO_ALCANCADO: DATA|||. "
                 "Se pedir PIX: informe. Se pedir boleto: |||ACAO: ENVIAR_BOLETOS|||. "
-                "Se pedir a Nota Fiscal (NF) ou segunda via: |||ACAO: BUSCAR_NF_EMAIL|||. "
                 "Esses marcadores NÃO aparecem para o cliente."
             )
+            
+        # Injeção de Segurança Anti-Repetição e Força-Tarefa de Documentos
+        system_instruction += "\n\nREGRA CRÍTICA DE SOBREVIVÊNCIA: NUNCA repita a mesma frase ou pergunta de cobrança que você já usou nas últimas mensagens do histórico."
         
+        if any(w in mensagem_cliente.lower() for w in ['nota', 'nf', 'boleto', 'pdf', 'arquivo', 'segunda via']):
+            prompt += (
+                "\n\n[ATENÇÃO MÁXIMA PARA ESTE TURNO]: O cliente acabou de solicitar um arquivo/documento. "
+                "Sua ÚNICA missão agora é falar 'Claro, estou enviando por aqui!' de forma simpática. "
+                "É ESTRITAMENTE PROIBIDO fazer perguntas, mencionar a palavra 'dívida', falar valores ou adicionar o hook de cobrança (ex: 'Aproveitando...'). "
+                "VOCÊ DEVE OBRIGATORIAMENTE incluir a tag |||ACAO: BUSCAR_NF_EMAIL||| no final do seu texto gerado."
+            )
+            
         resposta, erro = self._chamar_gemini(prompt, system_instruction)
         if erro:
             return None, erro
