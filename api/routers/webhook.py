@@ -599,15 +599,38 @@ async def receber_webhook_evolution(request: Request):
             resp_limpa = re.sub(r'\n{3,}', '\n\n', resp_limpa).strip()
             
             msg_final = f"*Analu (Assistente Virtual) Diz:*\n\n{resp_limpa}"
-            # Envio usando o JID original completo para garantir entrega (especialmente @lid)
-            evo.enviar_mensagem_texto(remote_jid, msg_final)
+            # --- LOGICA DE ENVIO COM RETRY (9º DÍGITO BRA) ---
+            _log_webhook(f"Enviando resposta para {remote_jid}...")
+            r_envio = evo.enviar_mensagem_texto(remote_jid, msg_final)
             
+            # Se falhou e é brasileiro, tenta o fallback do 9º dígito
+            if not r_envio and "55" in str(remote_jid):
+                _log_webhook("Tentativa falhou. Testando variação do 9º dígito (Brasil)...")
+                # Se tem 13 dígitos + @, tenta tirar o 9 (posição 4 depois do 55+DDD)
+                # JID: 5561998334833@s.whatsapp.net -> 556198334833@s.whatsapp.net
+                partes = str(remote_jid).split("@")
+                num_base = partes[0]
+                if len(num_base) == 13: # 55 + DDD (2) + 9 + 8 digitos
+                    num_sem_9 = num_base[:4] + num_base[5:] # Remove o 5º caractere (o 9)
+                    jid_sem_9 = f"{num_sem_9}@{partes[1]}"
+                    _log_webhook(f"Tentando enviar para JID alternativo: {jid_sem_9}")
+                    r_envio = evo.enviar_mensagem_texto(jid_sem_9, msg_final)
+                elif len(num_base) == 12: # Tenta ADICIONAR o 9 se tiver 12
+                    num_com_9 = num_base[:4] + "9" + num_base[4:]
+                    jid_com_9 = f"{num_com_9}@{partes[1]}"
+                    _log_webhook(f"Tentando enviar para JID alternativo (com 9): {jid_com_9}")
+                    r_envio = evo.enviar_mensagem_texto(jid_com_9, msg_final)
+            
+            if r_envio:
+                _log_webhook("Fim do processamento com sucesso.")
+            else:
+                _log_webhook("Fim do processamento com falha no envio final.", "ERROR")
+
             ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             history_list.append({"role": "user", "text": texto, "timestamp": ts})
             history_list.append({"role": "model", "text": resp_limpa, "timestamp": ts})
             # Salvar contexto integral para prova/PDF
             _atualizar_sessao(cnpj, session_id, history_json=json.dumps(history_list), ultima_mensagem_enviada=resp_limpa)
-            _log_webhook("Fim do processamento com sucesso.")
             return {"status": "ok"}
 
     except Exception as e:
