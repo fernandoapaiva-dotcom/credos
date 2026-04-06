@@ -99,7 +99,7 @@ def _encontrar_empresa_por_numero(numero: str):
             # Busca por final do número (8 dígitos + flexibilidade)
             search_pattern = f"%{numero_limpo[-8:]}%"
             cli = conn.cursor().execute(
-                "SELECT nome FROM clientes WHERE whatsapp LIKE ?", (search_pattern,)
+                "SELECT nome, cnpj FROM clientes WHERE whatsapp LIKE ?", (search_pattern,)
             ).fetchone()
             if cli:
                 _log_webhook(f"Cliente '{cli['nome']}' encontrado na empresa {u['empresa_nome']} (CNPJ: {cnpj})")
