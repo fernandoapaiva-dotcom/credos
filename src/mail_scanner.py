@@ -100,80 +100,70 @@ class MailScanner:
             
         return dados
 
-    def validar_arquivo_pertence_cliente(self, filepath, cnpj_alvo, nome_alvo, vencimento_alvo=None, valor_alvo=None, nf_alvo=None):
-        """
-        Retorna TRUE se encontrar o CNPJ ou parte do NOME no arquivo.
-        Também valida Vencimento, Valor e Número da NF se fornecidos.
-        """
+    import itertools
+
+    def extrair_meta_documento(self, filepath, cnpj_alvo, nome_alvo, nf_alvo, vencimento_alvo):
+        """Extrai todos os metadados matemáticos e de identidade do arquivo."""
+        meta = {'pertence_cliente': False, 'tem_nf': False, 'valores': set(), 'tem_vencimento': False}
         texto = self._extrair_texto_arquivo(filepath)
         fname_limpo = os.path.basename(filepath).lower()
         
-        # Normaliza textos para comparação
         texto_limpo = re.sub(r'\D', '', texto) if texto else ""
         texto_upper = texto.upper() if texto else ""
         
-        # --- VALIDAÇÃO DE SEGURANÇA ESTRITA (ANTI-VAZAMENTO) ---
-        cliente_ok = False
         cnpj_limpo = re.sub(r'\D', '', str(cnpj_alvo)) if cnpj_alvo else ""
-        
-        # 🚨 PROTEÇÃO CONTRA IMPORTAÇÃO ERRADA DE DB: Se o CNPJ for do EMISSOR, não usar como proxy do cliente!
         if cnpj_limpo and "54804458000122" in cnpj_limpo:
             cnpj_limpo = ""
 
         nome_curto = " ".join(nome_alvo.upper().split()[:2]) if nome_alvo else ""
 
-        # 1. Tenta achar o cliente no NOME do arquivo ou DESCRIÇÃO do texto
+        # 1. Identidade
         if cnpj_limpo and len(cnpj_limpo) > 5 and (cnpj_limpo in texto_limpo or cnpj_limpo in fname_limpo):
-            cliente_ok = True
+            meta['pertence_cliente'] = True
         elif nome_curto and len(nome_curto) > 3 and (nome_curto in texto_upper or nome_curto in fname_limpo.upper()):
-            cliente_ok = True
+            meta['pertence_cliente'] = True
 
-        if not cliente_ok:
-            if not texto:
-                print(f"   ❌ Arquivo Ilegível e sem Evidências de Cliente: {os.path.basename(filepath)}. DESCARTADO POR SEGURANÇA.", flush=True)
-            else:
-                print(f"   ❌ Arquivo descartado: Faltam evidências de que pertence a '{nome_curto}'.", flush=True)
-            return False
-        
-        if not texto:
-            print(f"   ⚠️ PDF sem texto, MAS o nome do arquivo identifica o cliente ('{nome_curto}'). APROVADO: {os.path.basename(filepath)}.", flush=True)
-            return True
-
-        # 2. Se o cliente está no documento, agora validamos o MÉRITO (é dessa dívida?)
-        
-        # Prova A: Número da NF (garantir que não seja só o prefixo inserido por nós no download)
+        # Para PDFs imagem, confiamos no título para a NF
+        if not texto and meta['pertence_cliente']:
+            meta['tem_nf'] = True
+            
+        # 2. Número da NF
         if nf_alvo:
             nf_search = str(nf_alvo)
-            # Verifica no texto com margem (ex: NFe 1237 ou similar), evitando números aleatórios gigantes
             if re.search(rf'\b0*{nf_search}\b', texto) or f" {nf_search} " in fname_limpo.replace('-', ' ').replace('_', ' '):
-                print(f"   ✅ Arquivo Válido: Cliente e NF confirmados.", flush=True)
-                return True
-            
-        # Prova B: Valor exato
-        if valor_alvo:
-            valor_str = f"{valor_alvo:,.2f}".replace('.', '#').replace(',', '.').replace('#', ',')
-            if valor_str in texto or f"{valor_alvo:.2f}" in texto:
-                print(f"   ✅ Arquivo Válido: Cliente e Valor financeiro confirmados.", flush=True)
-                return True
+                meta['tem_nf'] = True
 
-        # Prova C: Data de vencimento
-        if vencimento_alvo:
-            venc_fmt = str(vencimento_alvo).replace('-', '/').replace('.', '/')
-            if venc_fmt in texto or vencimento_alvo in texto:
-                print(f"   ✅ Arquivo Válido: Cliente e Vencimento confirmados.", flush=True)
-                return True
+        # 3. Extração de Valores e Vencimento
+        if texto:
+            # Captura valores tipo 1.234,56 ou 1234,56 ou 12,34
+            valores_str = re.findall(r'\b\d{1,3}(?:\.\d{3})*,\d{2}\b', texto)
+            for v_str in valores_str:
+                try:
+                    num = float(v_str.replace('.', '').replace(',', '.'))
+                    if num > 0: meta['valores'].add(num)
+                except: pass
+                
+            if vencimento_alvo:
+                venc_fmt = str(vencimento_alvo).replace('-', '/').replace('.', '/')
+                if venc_fmt in texto or vencimento_alvo in texto:
+                    meta['tem_vencimento'] = True
 
-        print(f"   ❌ Arquivo descartado: Cliente achado, mas não referencia esta NF/Dívida específica.", flush=True)
-        return False
+        return meta
 
     def baixar_anexos_por_nf_validado(self, numero_nf, cnpj_cliente, nome_cliente, vencimento=None, valor=None):
         mail = self.conectar()
         if not mail: return []
 
-        arquivos_baixados = []
+        arquivos_validados_finais = []
         nf_str = str(numero_nf).strip()
         nf_sem_zero = str(int(nf_str)) if nf_str.isdigit() else nf_str
         
+        # Converte alvo para float se existir
+        valor_alvo_float = None
+        if valor:
+            try: valor_alvo_float = float(valor)
+            except: pass
+
         pastas_candidatas = [
             '[Gmail]/E-mails enviados', '[Gmail]/Sent Mail', '[Gmail]/Todos os e-mails', '[Gmail]/All Mail',
             'Enviados', 'Itens Enviados', 'Sent', 'Sent Items', 'INBOX'
@@ -190,11 +180,10 @@ class MailScanner:
                 pastas_reais.append(decoded)
             todas_pastas = list(set(pastas_candidatas + pastas_reais))
             
-            print(f"🔍 Procurando NF {nf_str}...") 
+            print(f"🔍 Procurando Lotes na NF {nf_str} (Val Esperado: {valor_alvo_float})...", flush=True) 
 
             for pasta in todas_pastas:
                 if any(x in pasta.lower() for x in ['spam', 'trash', 'lixeira', 'drafts']): continue
-
                 if not self._selecionar_pasta_segura(mail, pasta): continue
 
                 ids = []
@@ -213,6 +202,8 @@ class MailScanner:
                 
                 for e_id in ids:
                     _, msg_data = mail.fetch(e_id, "(RFC822)")
+                    arquivos_do_email = []
+                    
                     for response_part in msg_data:
                         if isinstance(response_part, tuple):
                             msg = email.message_from_bytes(response_part[1])
@@ -225,31 +216,79 @@ class MailScanner:
                                     fname_lower = fname.lower()
                                     if any(ext in fname_lower for ext in ['.pdf', '.xml', '.boleto', '.zip']):
                                         fname_clean = self.limpar_nome_arquivo(fname)
-                                        fpath = os.path.join(self.pasta_destino, f"{nf_str}_{fname_clean}")
+                                        fpath = os.path.join(self.pasta_destino, f"{nf_str}_{e_id.decode()}_{fname_clean}")
                                         
                                         with open(fpath, "wb") as f:
                                             f.write(part.get_payload(decode=True))
                                         
-                                        # --- AQUI ENTRA A VALIDAÇÃO ---
                                         if fpath.endswith('.zip'):
-                                            arquivos_baixados.append(fpath)
+                                            arquivos_validados_finais.append(fpath) # Zips ignoram análise profunda
                                         else:
-                                            eh_valido = self.validar_arquivo_pertence_cliente(fpath, cnpj_cliente, nome_cliente, vencimento, valor, nf_str)
-                                            if eh_valido:
-                                                arquivos_baixados.append(fpath)
-                                            else:
-                                                # Tenta remover se não for válido
-                                                try: os.remove(fpath)
-                                                except: pass
+                                            arquivos_do_email.append(fpath)
+                                            
+                    if not arquivos_do_email: continue
+                    
+                    print(f"📦 Analisando lote de {len(arquivos_do_email)} arquivos no e-mail {e_id.decode()}...", flush=True)
+                    
+                    lote_meta = []
+                    for fpath in arquivos_do_email:
+                        meta = self.extrair_meta_documento(fpath, cnpj_cliente, nome_cliente, nf_str, vencimento)
+                        meta['fpath'] = fpath
+                        lote_meta.append(meta)
+                        
+                    # Filtragem Estrita 1: Cliente e NF
+                    arquivos_cliente = [m for m in lote_meta if m['pertence_cliente'] and m['tem_nf']]
+                    
+                    arquivos_aprovados = set()
+                    
+                    # Estratégia A: Match Exato (Valor Unitário Bate ou Vencimento Bate Perfeitamente)
+                    for m in arquivos_cliente:
+                        match_valor = False
+                        if valor_alvo_float:
+                            for v in m['valores']:
+                                if abs(v - valor_alvo_float) < 0.05: match_valor = True
+                        
+                        # Se achou o valor financeiro cravado ou a data de vencimento batendo, ou se nao foi mandado valor alvo
+                        if match_valor or (m['tem_vencimento']) or (not valor_alvo_float and not vencimento):
+                            arquivos_aprovados.add(m['fpath'])
+                            print(f"   ✅ {os.path.basename(m['fpath'])} CUMPRIU TODOS OS REQUISITOS INDIRETOS/DIRETOS.", flush=True)
+
+                    # Estratégia B: Soma Matemática (Produto + Serviço)
+                    if not arquivos_aprovados and valor_alvo_float and len(arquivos_cliente) > 1:
+                        # Extrai todos os valores e suas origens
+                        mapa_valores = []
+                        for m in arquivos_cliente:
+                            for v in m['valores']:
+                                mapa_valores.append({'valor': v, 'fpath': m['fpath']})
+                        
+                        # Tenta combinações de 2 a N documentos
+                        from itertools import combinations
+                        achou_combinacao = False
+                        for r in range(2, min(5, len(mapa_valores) + 1)):
+                            for combo in combinations(mapa_valores, r):
+                                soma_combo = sum(c['valor'] for c in combo)
+                                if abs(soma_combo - valor_alvo_float) < 0.05:
+                                    print(f"   🧩 COMBO ENCONTRADO! Soma exata = {soma_combo}", flush=True)
+                                    for c in combo: arquivos_aprovados.add(c['fpath'])
+                                    achou_combinacao = True
+                                    break
+                            if achou_combinacao: break
+                            
+                    # Limpeza
+                    for fpath in arquivos_do_email:
+                        if fpath in arquivos_aprovados:
+                            arquivos_validados_finais.append(fpath)
+                        else:
+                            try: os.remove(fpath)
+                            except: pass
 
             try: mail.close()
             except: pass
             mail.logout()
         except Exception as e:
-            if "CLOSE" not in str(e): # Ignora erro de estado CLOSE se já estiver limpo
-                print(f"Erro Scanner: {e}")
+            if "CLOSE" not in str(e): print(f"Erro Scanner: {e}", flush=True)
         
-        return list(set(arquivos_baixados))
+        return list(set(arquivos_validados_finais))
 
     def buscar_e_extrair_dados_nf(self, numero_nf, cnpj_cliente, nome_cliente):
         """Busca o email, baixa XML/PDF e tenta extrair a 'Data de Emissão'."""
