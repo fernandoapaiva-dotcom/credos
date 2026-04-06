@@ -604,7 +604,21 @@ async def receber_webhook_evolution(request: Request):
                             for arq in arquivos:
                                 if arq.lower().endswith('.pdf'):
                                     _log_webhook(f"PDF encontrado: {os.path.basename(arq)}. Enviando...")
-                                    evo.enviar_midia(remote_jid, arq)
+                                    r_midia = evo.enviar_midia(remote_jid, arq)
+                                    
+                                    if not r_midia and "55" in str(remote_jid):
+                                        partes = str(remote_jid).split("@")
+                                        num_base = partes[0]
+                                        jid_alt = None
+                                        if len(num_base) == 13:
+                                            jid_alt = f"{num_base[:4]}{num_base[5:]}@{partes[1]}"
+                                        elif len(num_base) == 12:
+                                            jid_alt = f"{num_base[:4]}9{num_base[4:]}@{partes[1]}"
+                                            
+                                        if jid_alt:
+                                            _log_webhook(f"Tentativa falhou. Testando variação do 9º dígito (Brasil) para arquivo: {jid_alt}")
+                                            evo.enviar_midia(jid_alt, arq)
+                                            
                                     encontrados += 1
                         else:
                             _log_webhook(f"NF {nf_num} não encontrada.")
