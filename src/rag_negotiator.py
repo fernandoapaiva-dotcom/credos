@@ -223,9 +223,10 @@ class RAGNegotiator:
         
         if any(w in mensagem_cliente.lower() for w in ['nota', 'nf', 'boleto', 'pdf', 'arquivo', 'segunda via']):
             prompt += (
-                "\n\n[ATENÇÃO MÁXIMA PARA ESTE TURNO]: O cliente acabou de solicitar um arquivo/documento. "
-                "Sua ÚNICA missão agora é falar 'Claro, estou enviando por aqui!' de forma simpática. "
-                "É ESTRITAMENTE PROIBIDO fazer perguntas, mencionar a palavra 'dívida', falar valores ou adicionar o hook de cobrança (ex: 'Aproveitando...'). "
+                "\n\n[ATENÇÃO MÁXIMA PARA ESTE TURNO]: O cliente solicitou um arquivo/documento. "
+                "Responda dizendo 'Claro, estou enviando por aqui!' de forma simpática. "
+                "Se o cliente perguntou o valor do débito, INFORME O VALOR (ex: 'O valor do débito atual é R$ X.XX'). "
+                "No entanto, É PROIBIDO fazer cobranças agressivas, exigir datas de pagamento ou pressionar na mesma mensagem. Apenas passe a informação de forma leve. "
                 "VOCÊ DEVE OBRIGATORIAMENTE incluir a tag |||ACAO: BUSCAR_NF_EMAIL||| no final do seu texto gerado."
             )
             

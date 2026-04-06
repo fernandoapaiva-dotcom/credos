@@ -104,13 +104,16 @@ class MailScanner:
 
     def extrair_meta_documento(self, filepath, cnpj_alvo, nome_alvo, nf_alvo, vencimento_alvo):
         """Extrai todos os metadados matemáticos e de identidade do arquivo."""
-        meta = {'pertence_cliente': False, 'tem_nf': False, 'valores': set(), 'tem_vencimento': False}
+        meta = {'pertence_cliente': False, 'tem_nf': False, 'valores': set(), 'tem_vencimento': False, 'eh_imagem': False}
         texto = self._extrair_texto_arquivo(filepath)
         fname_limpo = os.path.basename(filepath).lower()
         
         texto_limpo = re.sub(r'\D', '', texto) if texto else ""
         texto_upper = texto.upper() if texto else ""
         
+        if not texto:
+            meta['eh_imagem'] = True
+            
         cnpj_limpo = re.sub(r'\D', '', str(cnpj_alvo)) if cnpj_alvo else ""
         if cnpj_limpo and "54804458000122" in cnpj_limpo:
             cnpj_limpo = ""
@@ -248,8 +251,8 @@ class MailScanner:
                             for v in m['valores']:
                                 if abs(v - valor_alvo_float) < 0.05: match_valor = True
                         
-                        # Se achou o valor financeiro cravado ou a data de vencimento batendo, ou se nao foi mandado valor alvo
-                        if match_valor or (m['tem_vencimento']) or (not valor_alvo_float and not vencimento):
+                        # Se achou o valor financeiro cravado ou a data de vencimento batendo, ou se nao foi mandado valor alvo, ou se for IMAGEM (não dá pra ler valor)
+                        if match_valor or (m['tem_vencimento']) or (not valor_alvo_float and not vencimento) or m['eh_imagem']:
                             arquivos_aprovados.add(m['fpath'])
                             print(f"   ✅ {os.path.basename(m['fpath'])} CUMPRIU TODOS OS REQUISITOS INDIRETOS/DIRETOS.", flush=True)
 
