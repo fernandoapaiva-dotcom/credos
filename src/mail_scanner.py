@@ -115,6 +115,11 @@ class MailScanner:
         # --- VALIDAÇÃO DE SEGURANÇA ESTRITA (ANTI-VAZAMENTO) ---
         cliente_ok = False
         cnpj_limpo = re.sub(r'\D', '', str(cnpj_alvo)) if cnpj_alvo else ""
+        
+        # 🚨 PROTEÇÃO CONTRA IMPORTAÇÃO ERRADA DE DB: Se o CNPJ for do EMISSOR, não usar como proxy do cliente!
+        if cnpj_limpo and "54804458000122" in cnpj_limpo:
+            cnpj_limpo = ""
+
         nome_curto = " ".join(nome_alvo.upper().split()[:2]) if nome_alvo else ""
 
         # 1. Tenta achar o cliente no NOME do arquivo ou DESCRIÇÃO do texto
@@ -127,18 +132,22 @@ class MailScanner:
             if not texto:
                 print(f"   ❌ Arquivo Ilegível e sem Evidências de Cliente: {os.path.basename(filepath)}. DESCARTADO POR SEGURANÇA.")
             else:
-                print(f"   ❌ Arquivo descartado: Faltam evidências de que pertence a {nome_curto or cnpj_limpo}.")
+                print(f"   ❌ Arquivo descartado: Faltam evidências de que pertence a '{nome_curto}'.")
             return False
         
         if not texto:
-            print(f"   ⚠️ PDF sem texto, MAS o nome do arquivo identifica o cliente. APROVADO: {os.path.basename(filepath)}.")
+            print(f"   ⚠️ PDF sem texto, MAS o nome do arquivo identifica o cliente ('{nome_curto}'). APROVADO: {os.path.basename(filepath)}.")
             return True
 
         # 2. Se o cliente está no documento, agora validamos o MÉRITO (é dessa dívida?)
-        # Prova A: Número da NF
-        if nf_alvo and (str(nf_alvo) in fname_limpo or str(nf_alvo) in texto):
-            print(f"   ✅ Arquivo Válido: Cliente e NF confirmados.")
-            return True
+        
+        # Prova A: Número da NF (garantir que não seja só o prefixo inserido por nós no download)
+        if nf_alvo:
+            nf_search = str(nf_alvo)
+            # Verifica no texto com margem (ex: NFe 1237 ou similar), evitando números aleatórios gigantes
+            if re.search(rf'\b0*{nf_search}\b', texto) or f" {nf_search} " in fname_limpo.replace('-', ' ').replace('_', ' '):
+                print(f"   ✅ Arquivo Válido: Cliente e NF confirmados.")
+                return True
             
         # Prova B: Valor exato
         if valor_alvo:
