@@ -99,6 +99,14 @@ class EvolutionController:
                         "MESSAGES_UPSERT",
                         "CONNECTION_UPDATE"
                     ]
+                },
+                "settings": {
+                    "reject_call": False,
+                    "groups_ignore": True,
+                    "always_online": True,
+                    "read_messages": True,
+                    "read_status": False,
+                    "sync_full_history": False
                 }
             }
             r = requests.post(endpoint, json=payload, headers=self.headers, timeout=60)

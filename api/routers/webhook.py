@@ -21,9 +21,11 @@ _processed_message_ids: set = set()
 _MAX_IDS_CACHE = 500  # Limita crescimento do set
 
 def _log_webhook(msg: str, level="INFO"):
-    """Escreve um log de auditoria para rastreabilidade."""
+    """Escreve um log de auditoria para rastreabilidade portátil."""
     try:
-        log_dir = r"C:\Antigravity\credos\logs"
+        # Usa o diretório de dados configurado ou ./data/logs como padrão
+        base_dir = os.getenv("DATABASE_DIR", os.path.join(os.getcwd(), "data"))
+        log_dir = os.path.join(base_dir, "logs")
         os.makedirs(log_dir, exist_ok=True)
         log_file = os.path.join(log_dir, "webhook_debug.log")
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -147,6 +149,7 @@ def _salvar_comprovante(cnpj, session_id, cliente_nome, arquivo_b64, mimetype):
 
 @router.post("/evolution")
 async def receber_webhook_evolution(request: Request):
+    _log_webhook(f"--- REQUISIÇÃO RECEBIDA: {request.method} {request.url} ---")
     try:
         try:
             payload = await request.json()
