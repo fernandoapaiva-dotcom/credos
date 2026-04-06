@@ -108,15 +108,10 @@ class MailScanner:
         texto = self._extrair_texto_arquivo(filepath)
         fname_limpo = os.path.basename(filepath).lower()
         
-        # Se o arquivo for uma imagem/PDF sem texto, mantemos por precaução
-        # pois foi encontrado num email cuja busca (assunto/corpo) encontrou a Nota Fiscal.
-        if not texto:
-            print(f"   ⚠️ Arquivo ilegível (imagem ou protegido): {os.path.basename(filepath)}. Mantendo anexo pois bateu com o e-mail da NF.")
-            return True 
-            
         # Normaliza textos para comparação
-        texto_limpo = re.sub(r'\D', '', texto) # Só números para CNPJ
-        texto_upper = texto.upper() # Maiúsculo para Nome
+        texto_limpo = re.sub(r'\D', '', texto) if texto else ""
+        texto_upper = texto.upper() if texto else ""
+        
         # --- VALIDAÇÃO DE SEGURANÇA ESTRITA (ANTI-VAZAMENTO) ---
         cliente_ok = False
         cnpj_limpo = re.sub(r'\D', '', str(cnpj_alvo)) if cnpj_alvo else ""
@@ -128,10 +123,16 @@ class MailScanner:
         elif nome_curto and len(nome_curto) > 3 and (nome_curto in texto_upper or nome_curto in fname_limpo.upper()):
             cliente_ok = True
 
-        # Se NÃO encontrou o cliente no documento, abortar imediato para evitar enviar NF errada (Vazamento de Dados)
         if not cliente_ok:
-            print(f"   ❌ Arquivo descartado: Faltam evidências de que pertence a {nome_curto or cnpj_limpo}.")
+            if not texto:
+                print(f"   ❌ Arquivo Ilegível e sem Evidências de Cliente: {os.path.basename(filepath)}. DESCARTADO POR SEGURANÇA.")
+            else:
+                print(f"   ❌ Arquivo descartado: Faltam evidências de que pertence a {nome_curto or cnpj_limpo}.")
             return False
+        
+        if not texto:
+            print(f"   ⚠️ PDF sem texto, MAS o nome do arquivo identifica o cliente. APROVADO: {os.path.basename(filepath)}.")
+            return True
 
         # 2. Se o cliente está no documento, agora validamos o MÉRITO (é dessa dívida?)
         # Prova A: Número da NF
