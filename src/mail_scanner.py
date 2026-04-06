@@ -249,10 +249,12 @@ class MailScanner:
                                                 try: os.remove(fpath)
                                                 except: pass
 
-            mail.close()
+            try: mail.close()
+            except: pass
             mail.logout()
         except Exception as e:
-            print(f"Erro Scanner: {e}")
+            if "CLOSE" not in str(e): # Ignora erro de estado CLOSE se já estiver limpo
+                print(f"Erro Scanner: {e}")
         
         return list(set(arquivos_baixados))
 

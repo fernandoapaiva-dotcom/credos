@@ -234,16 +234,19 @@ class EvolutionController:
             if "image" in mimetype: mediatype = "image"
             elif "video" in mimetype: mediatype = "video"
             elif "audio" in mimetype: mediatype = "audio"
+            
             payload = {
                 "number": target,
-                "media": b64,
-                "mediatype": mediatype,
-                "fileName": filename,
-                "caption": filename
+                "mediaMessage": {
+                    "mediatype": mediatype,
+                    "fileName": filename,
+                    "caption": filename,
+                    "media": b64
+                }
             }
             r = requests.post(endpoint, json=payload, headers=self.headers)
             if r.status_code not in [200, 201]:
-                self.debug_log("FALHA ENVIO MÍDIA B64", endpoint, r)
+                self.debug_log("FALHA ENVIO MÍDIA B64", endpoint, r, payload)
                 return False
             return True
         except Exception as e:

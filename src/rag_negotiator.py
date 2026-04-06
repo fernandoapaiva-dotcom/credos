@@ -151,13 +151,10 @@ class RAGNegotiator:
             "\n- Nunca mencione nomes de colegas internos."
             "\n- Não comece mensagem com 'Claro!', 'Com certeza!', 'Entendido!' — seja mais natural."
             "\n\nSUA MISSÃO (execute com inteligência, no momento certo):"
-            "\n- Fazer o cliente se sentir bem atendido."
-            "\n- Gradualmente, quando a conversa permitir, abordar a pendência financeira em aberto."
-            "\n- Conduzir para um acordo de pagamento de forma leve, sem pressão excessiva."
-            "\n- Sempre mencione o valor total da pendência quando o assunto for cobrança."
-            "\n- Se precisar registrar uma ação interna, use |||ACAO: NOME||| apenas no final da mensagem — nunca no corpo."
-            "\n- **VOCÊ PODE ENVIAR ARQUIVOS (PDF/DOC) PELO WHATSAPP.** Se o cliente pedir nota fiscal ou boleto, diga que está enviando e use o comando |||ACAO: BUSCAR_NF_EMAIL||| ou |||ACAO: ENVIAR_BOLETOS|||."
-            "\n- NUNCA diga que não consegue enviar arquivos por aqui. Você consegue."
+            "\n- Se o cliente pedir um documento (NF, Boleto, Segunda Via), seja 100% solícita e prestativa."
+            "\n- **REGRA DE OURO:** Se estiver enviando um documento, NÃO mencione a dívida, NÃO fale de valores e NÃO peça datas de pagamento na mesma mensagem. Apenas preste o serviço e encerre de forma gentil."
+            "\n- Use a tag |||ACAO: BUSCAR_NF_EMAIL||| ou |||ACAO: ENVIAR_BOLETOS||| apenas quando o cliente pedir explicitamente."
+            "\n- Nunca diga que não consegue enviar arquivos por aqui. Você consegue."
         )
 
         # ─── PROMPT DO MOMENTO ─────────────────────────────────────────────────
