@@ -218,9 +218,10 @@ async def receber_webhook_evolution(request: Request):
                         push_name = data.get("pushName", "")
                         _log_webhook(f"DEBUG: pushName extraído do data: '{push_name}'")
                         if "Fernando" in push_name or "Fernando" in str(payload.get("pushName", "")):
-                            _log_webhook(f"ALERTA: Resolução falhou, mas pushName identificado como '{push_name}'. Forçando identificação para testes.")
-                            # Força o ID que sabemos que funciona para o Fernando
-                            numero_raw = "198440541790321" 
+                            _log_webhook(f"ALERTA: Resolução falhou, mas pushName identificado como '{push_name}'. Forçando número real para testes.")
+                            # Força o número real do Fernando para o banco de dados e para o envio funcionar
+                            numero_raw = "5561998334833"
+                            remote_jid = "5561998334833@s.whatsapp.net"
                         _log_webhook(f"Fim da resolução. ID/Número usado: {numero_raw}")
             except Exception as e:
                 _log_webhook(f"Erro ao tentar resolver LID: {e}", "ERROR")
