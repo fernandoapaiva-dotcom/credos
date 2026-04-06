@@ -134,11 +134,18 @@ class EvolutionController:
     def get_contact(self, jid: str):
         """Busca detalhes de um contato (nome/número) a partir do JID (especialmente para @lid)."""
         try:
-            # Em v1.8.2 a rota para buscar detalhes de um contato por JID é essa:
-            endpoint = f"{self.url}/chat/contact/{self.instance}/{jid}"
+            import urllib.parse
+            # Em v1.8.2 a resolução de JID exige encoding do caractere @ na URL
+            jid_encoded = urllib.parse.quote(jid)
+            endpoint = f"{self.url}/chat/contact/{self.instance}/{jid_encoded}"
             r = requests.get(endpoint, headers=self.headers, timeout=10)
             if r.status_code == 200:
                 return r.json()
+            # Tenta um segundo endpoint comum em v1.8.2 (query param)
+            endpoint_alt = f"{self.url}/chat/fetchProfile/{self.instance}?number={jid_encoded}"
+            r_alt = requests.get(endpoint_alt, headers=self.headers, timeout=10)
+            if r_alt.status_code == 200:
+                return r_alt.json()
             return None
         except Exception as e:
             self.debug_log(f"Erro ao buscar contato {jid}", "", e)
@@ -152,9 +159,15 @@ class EvolutionController:
             if 'localhost' in self.url and os.path.exists('/.dockerenv'):
                 self.url = self.url.replace('localhost', 'evolution')
 
-            target = "".join(filter(str.isdigit, str(numero)))
-            if not target: return False
-            if len(target) <= 11: target = "55" + target
+            # Se o número já vier com @ (ex: @lid ou @s.whatsapp.net), use como JID direto
+            if "@" in str(numero):
+                target = str(numero)
+            else:
+                target = "".join(filter(str.isdigit, str(numero)))
+                if not target: return False
+                if len(target) <= 11: target = "55" + target
+                if "@s.whatsapp.net" not in target and "@" not in target:
+                    target += "@s.whatsapp.net"
             
             endpoint = f"{self.url}/message/sendText/{self.instance}"
             payload = {

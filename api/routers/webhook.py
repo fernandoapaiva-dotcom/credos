@@ -598,7 +598,8 @@ async def receber_webhook_evolution(request: Request):
             resp_limpa = re.sub(r'\n{3,}', '\n\n', resp_limpa).strip()
             
             msg_final = f"*Analu (Assistente Virtual) Diz:*\n\n{resp_limpa}"
-            evo.enviar_mensagem_texto(numero_raw, msg_final)
+            # Envio usando o JID original completo para garantir entrega (especialmente @lid)
+            evo.enviar_mensagem_texto(remote_jid, msg_final)
             
             ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             history_list.append({"role": "user", "text": texto, "timestamp": ts})
