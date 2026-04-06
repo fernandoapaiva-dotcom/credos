@@ -131,6 +131,19 @@ class EvolutionController:
             print(f"Erro ao deletar: {e}")
             return False
 
+    def get_contact(self, jid: str):
+        """Busca detalhes de um contato (nome/número) a partir do JID (especialmente para @lid)."""
+        try:
+            # Em v1.8.2 a rota para buscar detalhes de um contato por JID é essa:
+            endpoint = f"{self.url}/chat/contact/{self.instance}/{jid}"
+            r = requests.get(endpoint, headers=self.headers, timeout=10)
+            if r.status_code == 200:
+                return r.json()
+            return None
+        except Exception as e:
+            self.debug_log(f"Erro ao buscar contato {jid}", "", e)
+            return None
+
     def enviar_mensagem_texto(self, numero, mensagem):
         try:
             if not self.url or not self.apikey: return False

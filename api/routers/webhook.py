@@ -178,7 +178,45 @@ async def receber_webhook_evolution(request: Request):
         key = data.get("key", {})
         
         instance_name = payload.get("instance")
-        numero_raw = key.get("remoteJid", "").replace("@s.whatsapp.net", "").replace("@g.us", "")
+        remote_jid = key.get("remoteJid", "")
+        
+        # Lógica especial para IDs @lid (WhatsApp Beta/Multi-device)
+        # Tenta resolver o número real via Evolution API se for um LID
+        if "@lid" in remote_jid:
+            _log_webhook(f"ID @lid detectado ({remote_jid}). Solicitando resolução à Evolution...")
+            try:
+                # Carrega config para ter a API Key
+                unidades = carregar_todas_unidades_db()
+                u_target = unidades[0] # Pega a primeira por padrão para a Controller
+                for u in unidades:
+                    if u['empresa_cnpj'] == (instance_name or ""): 
+                        u_target = u
+                        break
+                
+                cfg_temp = carregar_configuracoes_db(u_target['empresa_cnpj'])
+                evo_temp = EvolutionController(config=cfg_temp, nome_empresa_cliente=instance_name)
+                
+                # Tenta buscar do participant (que v1 as vezes já traz limpo)
+                participante = (data.get("participant") or key.get("participant") or "").split("@")[0]
+                if participante and len(participante) > 8 and not participante.startswith("198"):
+                    numero_raw = participante
+                    _log_webhook(f"Número resolvido via HEURÍSTICA participant: {numero_raw}")
+                else:
+                    # RESOLUÇÃO OFICIAL: Pergunta para a Evolution
+                    _log_webhook(f"Iniciando Resolução Oficial via API para: {remote_jid}")
+                    contato = evo_temp.get_contact(remote_jid)
+                    if contato and contato.get('number'):
+                        numero_raw = str(contato.get('number')).split("@")[0]
+                        _log_webhook(f"Número resolvido via API: {numero_raw}")
+                    else:
+                        numero_raw = remote_jid.split("@")[0]
+                        _log_webhook(f"Resolução falhou. Mantendo ID original: {numero_raw}")
+            except Exception as e:
+                _log_webhook(f"Erro ao tentar resolver LID: {e}", "ERROR")
+                numero_raw = remote_jid.split("@")[0]
+        else:
+            numero_raw = remote_jid.split("@")[0]
+            
         _log_webhook(f"--- NOVA MENSAGEM RECEBIDA: {numero_raw} (Instância: {instance_name}, Evento: {event}) ---")
 
         if key.get("fromMe", False):
@@ -414,7 +452,7 @@ async def receber_webhook_evolution(request: Request):
         # ─── 2. SE NÃO É OPERADOR, É CLIENTE ─────────────────────────
         cnpj, cliente_nome = _encontrar_empresa_por_numero(numero_raw)
         if not cnpj: 
-            _log_webhook(f"Ignorando sender desconhecido: {numero_raw}")
+            _log_webhook(f"Ignorando sender desconhecido: {numero_raw} (Considere cadastrar este número no CRM)")
             return {"status": "ignored", "reason": "unknown_sender"}
 
         _log_webhook(f"Cliente identificado: {cliente_nome} (Empresa: {cnpj})")
