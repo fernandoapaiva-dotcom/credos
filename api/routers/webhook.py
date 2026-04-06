@@ -29,8 +29,11 @@ def _log_webhook(msg: str, level="INFO"):
         os.makedirs(log_dir, exist_ok=True)
         log_file = os.path.join(log_dir, "webhook_debug.log")
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        # Log para arquivo
         with open(log_file, "a", encoding="utf-8") as f:
             f.write(f"[{timestamp}] [{level}] {msg}\n")
+        # Log para terminar (docker logs)
+        print(f"[{timestamp}] [{level}] {msg}", flush=True)
     except Exception as e:
         print(f"Erro Crítico ao salvar log: {e}")
 
@@ -146,6 +149,11 @@ def _salvar_comprovante(cnpj, session_id, cliente_nome, arquivo_b64, mimetype):
         conn.commit()
         return c.lastrowid
     finally: conn.close()
+
+@router.get("/evolution")
+async def testar_webhook_evolution():
+    _log_webhook("GET RECEBIDO - Rota de Webhook está ATIVA e ACESSÍVEL.")
+    return {"status": "online", "message": "Webhook do Credos está ouvindo!"}
 
 @router.post("/evolution")
 async def receber_webhook_evolution(request: Request):
