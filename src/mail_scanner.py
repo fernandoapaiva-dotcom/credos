@@ -117,61 +117,44 @@ class MailScanner:
         # Normaliza textos para comparação
         texto_limpo = re.sub(r'\D', '', texto) # Só números para CNPJ
         texto_upper = texto.upper() # Maiúsculo para Nome
-        
-        matches = 0
-        checks = 0
+        # --- VALIDAÇÃO DE SEGURANÇA ESTRITA (ANTI-VAZAMENTO) ---
+        cliente_ok = False
+        cnpj_limpo = re.sub(r'\D', '', str(cnpj_alvo)) if cnpj_alvo else ""
+        nome_curto = " ".join(nome_alvo.upper().split()[:2]) if nome_alvo else ""
 
-        # 1. Validação por filename (se a nota ou boleto tiver a NF no nome do arquivo)
-        if nf_alvo and str(nf_alvo) in fname_limpo:
-            print(f"   ✅ Arquivo contém número de NF no nome.")
+        # 1. Tenta achar o cliente no NOME do arquivo ou DESCRIÇÃO do texto
+        if cnpj_limpo and len(cnpj_limpo) > 5 and (cnpj_limpo in texto_limpo or cnpj_limpo in fname_limpo):
+            cliente_ok = True
+        elif nome_curto and len(nome_curto) > 3 and (nome_curto in texto_upper or nome_curto in fname_limpo.upper()):
+            cliente_ok = True
+
+        # Se NÃO encontrou o cliente no documento, abortar imediato para evitar enviar NF errada (Vazamento de Dados)
+        if not cliente_ok:
+            print(f"   ❌ Arquivo descartado: Faltam evidências de que pertence a {nome_curto or cnpj_limpo}.")
+            return False
+
+        # 2. Se o cliente está no documento, agora validamos o MÉRITO (é dessa dívida?)
+        # Prova A: Número da NF
+        if nf_alvo and (str(nf_alvo) in fname_limpo or str(nf_alvo) in texto):
+            print(f"   ✅ Arquivo Válido: Cliente e NF confirmados.")
             return True
+            
+        # Prova B: Valor exato
+        if valor_alvo:
+            valor_str = f"{valor_alvo:,.2f}".replace('.', '#').replace(',', '.').replace('#', ',')
+            if valor_str in texto or f"{valor_alvo:.2f}" in texto:
+                print(f"   ✅ Arquivo Válido: Cliente e Valor financeiro confirmados.")
+                return True
 
-        # 2. Validação por CNPJ
-        if cnpj_alvo:
-            checks += 1
-            cnpj_limpo = re.sub(r'\D', '', str(cnpj_alvo))
-            if cnpj_limpo and len(cnpj_limpo) > 5:
-                if cnpj_limpo in texto_limpo:
-                    matches += 1
-                    print(f"   ✅ CNPJ OK")
-
-        # 3. Validação por Nome
-        if nome_alvo:
-            checks += 1
-            partes_nome = nome_alvo.upper().split()[:2] 
-            nome_curto = " ".join(partes_nome)
-            if nome_curto in texto_upper:
-                matches += 1
-                print(f"   ✅ Nome OK")
-
-        # 4. Validação por Vencimento
+        # Prova C: Data de vencimento
         if vencimento_alvo:
-            checks += 1
             venc_fmt = str(vencimento_alvo).replace('-', '/').replace('.', '/')
             if venc_fmt in texto or vencimento_alvo in texto:
-                matches += 1
-                print(f"   ✅ Vencimento OK")
+                print(f"   ✅ Arquivo Válido: Cliente e Vencimento confirmados.")
+                return True
 
-        # 5. Validação por Valor
-        if valor_alvo:
-            checks += 1
-            valor_str = f"{valor_alvo:,.2f}".replace('.', '#').replace(',', '.').replace('#', ',') # Padrao PT-BR
-            if valor_str in texto or f"{valor_alvo:.2f}" in texto:
-                matches += 1
-                print(f"   ✅ Valor OK")
-
-        # 6. Validação por Número da NF no texto
-        if nf_alvo:
-            checks += 1
-            if str(nf_alvo) in texto:
-                matches += 1
-                print(f"   ✅ Número NF OK")
-
-        # Se bateu o CNPJ já é suficiente, ou se bateu pelo menos 1 critério
-        if cnpj_alvo and (re.sub(r'\D', '', str(cnpj_alvo)) in texto_limpo):
-            return True
-        
-        return matches >= 1
+        print(f"   ❌ Arquivo descartado: Cliente achado, mas não referencia esta NF/Dívida específica.")
+        return False
 
     def baixar_anexos_por_nf_validado(self, numero_nf, cnpj_cliente, nome_cliente, vencimento=None, valor=None):
         mail = self.conectar()
