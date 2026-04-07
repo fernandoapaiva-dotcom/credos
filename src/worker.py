@@ -202,19 +202,45 @@ def disparar_negociacoes_ia(cnpj_filtro=None):
                     print(f"   ✅ {cliente}: todos os títulos quitados. Parando cobranças.")
                     continue
 
-                # ─── Dia 20+: Notificar operador sobre cartório ──────
+                # ─── Dia 19: Último Aviso ao Cliente ────────────────
+                if dia_atual == 19:
+                    msg_ultimo_aviso = (
+                        f"*Analu (Assistente Virtual) Diz:*\n\n"
+                        f"Olá, {cliente.split()[0]}! Preciso te avisar sobre uma situação importante. "
+                        f"Amanhã se encerra o prazo de negociação do seu débito de *R$ {info.get('total', 0):,.2f}*. "
+                        f"Caso não haja pagamento ou acordo, os títulos seguirão automaticamente para *protesto em cartório*. "
+                        f"Se quiser evitar isso, entre em contato agora mesmo que a gente resolve! 🤝"
+                    )
+                    for num in numeros:
+                        evo.enviar_mensagem_texto(num, msg_ultimo_aviso)
+                    print(f"   ⚠️ Aviso de D-1 cartório enviado para {cliente}.")
+
+                # ─── Dia 20+: Avisa cliente e Notifica operador ──────
                 if dia_atual >= 20:
+                    # 1. Avisa o cliente que o título vai a cartório
+                    msg_cliente_cartorio = (
+                        f"*Analu (Assistente Virtual) Diz:*\n\n"
+                        f"Olá, {cliente.split()[0]}. Infelizmente, o prazo de negociação de 20 dias se encerrou "
+                        f"sem que o débito de *R$ {info.get('total', 0):,.2f}* fosse regularizado. "
+                        f"Por este motivo, os títulos em aberto serão encaminhados para *protesto em cartório* hoje. "
+                        f"Caso queira evitar o protesto, entre em contato imediatamente com o nosso financeiro."
+                    )
+                    for num in numeros:
+                        evo.enviar_mensagem_texto(num, msg_cliente_cartorio)
+
+                    # 2. Notifica o operador para aprovação final
                     if operador_num:
                         total_fmt = f"R$ {info.get('total', 0):,.2f}"
+                        nomes_nfs = ", ".join([f"NF {it['numero_nf']}" for it in itens_elegíveis])
                         msg_op = (
                             f"⚠️ *ALERTA DE CARTÓRIO*\n"
                             f"Cliente: *{cliente}*\n"
-                            f"Débito: *{total_fmt}* (vencido há {max_dias} dias)\n\n"
-                            f"O prazo de 20 dias de negociação se encerrou sem pagamento.\n"
-                            f"Deseja enviar os títulos para protesto em cartório?\n\n"
-                            f"Responda:\n"
+                            f"Débito: *{total_fmt}* (vencido há {max_dias} dias)\n"
+                            f"Títulos: {nomes_nfs}\n\n"
+                            f"O prazo de 20 dias se encerrou. O cliente já foi avisado.\n"
+                            f"Confirma o envio para protesto?\n\n"
                             f"✅ CARTÓRIO_SIM_{cnpj}_{cliente.replace(' ', '_')[:20]}\n"
-                            f"❌ CARTÓRIO_NAO — para manter em aberto"
+                            f"❌ CARTÓRIO_NAO — para manter em aberto mais tempo"
                         )
                         evo.enviar_mensagem_texto(operador_num, msg_op)
                         print(f"   📋 Operador notificado sobre cartório de {cliente}.")
@@ -492,6 +518,153 @@ def verificar_retorno_cartorio(cnpj_filtro=None):
 
         except Exception as e:
             print(f"   ❌ Erro no acompanhamento de cartório ({cnpj}): {e}")
+
+
+def verificar_promessas_d1(cnpj_filtro=None):
+    """
+    Follow-up Automático D+1:
+    Verifica clientes que prometeram pagar mas não enviaram comprovante no dia seguinte.
+    A Analu envia mensagem perguntando se conseguiram pagar e retoma o ciclo se necessário.
+    """
+    from src.evolution_controller import EvolutionController
+    from src.database import carregar_configuracoes_db
+
+    agendamentos = listar_todos_agendamentos_ativos()
+    if cnpj_filtro:
+        agendamentos = [ag for ag in agendamentos if ag['empresa_dona_cnpj'] == cnpj_filtro]
+
+    hoje_str = datetime.now().strftime("%Y-%m-%d")
+
+    for ag in agendamentos:
+        cnpj = ag['empresa_dona_cnpj']
+        try:
+            conn = conectar(cnpj)
+            conn.row_factory = __import__('sqlite3').Row
+
+            # Busca sessões com promessa vencida há 1+ dia E que estão aguardando comprovante
+            sessoes_vencidas = conn.cursor().execute("""
+                SELECT ws.*, c.whatsapp
+                FROM webhook_sessions ws
+                LEFT JOIN clientes c ON trim(c.nome) = trim(ws.cliente_nome)
+                WHERE ws.estado IN ('acordo_aprovado', 'aguardando_comprovante')
+                  AND ws.data_promessa IS NOT NULL
+                  AND ws.data_promessa < date('now', '-1 day')
+            """).fetchall()
+
+            if not sessoes_vencidas:
+                conn.close()
+                continue
+
+            config = carregar_configuracoes_db(cnpj)
+            evo = EvolutionController(config=config, nome_empresa_cliente=config.get('empresa_nome'))
+
+            for sess in sessoes_vencidas:
+                sess = dict(sess)
+                cliente = sess['cliente_nome']
+                sessao_id = sess['id']
+                numero = sess.get('whatsapp') or sess.get('numero_whatsapp', '')
+                data_prom = sess.get('data_promessa', '')
+
+                # Verifica se já chegou comprovante depois da promessa
+                comp = conn.cursor().execute(
+                    "SELECT id FROM comprovantes WHERE session_id=? AND status='Confirmado'",
+                    (sessao_id,)
+                ).fetchone()
+
+                if comp:
+                    print(f"   ✅ {cliente}: comprovante confirmado. Sem necessidade de follow-up.")
+                    conn.cursor().execute(
+                        "UPDATE webhook_sessions SET estado='concluido', data_promessa=NULL WHERE id=?",
+                        (sessao_id,)
+                    )
+                    conn.commit()
+                    continue
+
+                # Envia mensagem de follow-up
+                msg_followup = (
+                    f"*Analu (Assistente Virtual) Diz:*\n\n"
+                    f"Olá, {cliente.split()[0]}! Tudo bem? 😊 "
+                    f"Você havia combinado de realizar o pagamento até o dia *{data_prom}*, "
+                    f"mas ainda não identificamos o comprovante no nosso sistema. "
+                    f"Conseguiu efetuar o pagamento? Se sim, pode mandar o comprovante aqui que a gente confirma. "
+                    f"Se tiver algum problema, me avisa que tentamos resolver juntos! 🤝"
+                )
+
+                if numero:
+                    numeros = [n.strip() for n in numero.split(';') if n.strip()]
+                    for num in numeros:
+                        evo.enviar_mensagem_texto(num, msg_followup)
+                    print(f"   🔔 Follow-up D+1 enviado para {cliente} (promessa: {data_prom}).")
+
+                # Retoma o ciclo de cobrança
+                conn.cursor().execute(
+                    "UPDATE webhook_sessions SET estado='aguardando_resposta', data_promessa=NULL WHERE id=?",
+                    (sessao_id,)
+                )
+                conn.commit()
+
+            conn.close()
+        except Exception as e:
+            print(f"   ❌ Erro no follow-up D+1 ({cnpj}): {e}")
+
+
+def resumo_e_execucao_cartorio_noturno(cnpj_filtro=None):
+    """
+    Agendamento Noturno do Cartório (21h):
+    1. Envia resumo ao operador dos títulos que serão protestados essa noite.
+    2. Executa a fila de cartório agendada para esse dia.
+    """
+    from src.evolution_controller import EvolutionController
+    from src.database import carregar_configuracoes_db
+
+    print(f"🏛️ [{datetime.now().strftime('%d/%m %H:%M')}] Iniciando Rotina Noturna de Cartório...")
+
+    agendamentos = listar_todos_agendamentos_ativos()
+    if cnpj_filtro:
+        agendamentos = [ag for ag in agendamentos if ag['empresa_dona_cnpj'] == cnpj_filtro]
+
+    for ag in agendamentos:
+        cnpj = ag['empresa_dona_cnpj']
+        try:
+            conn = conectar(cnpj)
+            conn.row_factory = __import__('sqlite3').Row
+
+            # Busca jobs agendados para hoje
+            jobs = conn.cursor().execute("""
+                SELECT cj.id, cj.titulo_id, t.numero_nf, t.valor, t.pagador
+                FROM cartorio_jobs cj
+                JOIN titulos t ON t.id = cj.titulo_id
+                WHERE cj.status_automacao = 'Agendado_Noturno'
+                ORDER BY cj.id ASC
+            """).fetchall()
+
+            if not jobs:
+                conn.close()
+                continue
+
+            config = carregar_configuracoes_db(cnpj)
+            evo = EvolutionController(config=config, nome_empresa_cliente=config.get('empresa_nome'))
+            operador_num = config.get('operador_whatsapp')
+
+            # 1. Resumo ao operador antes de executar
+            if operador_num:
+                linhas = [f"  • NF {j['numero_nf']} | {j['pagador']} | R$ {j['valor']:,.2f}" for j in [dict(j) for j in jobs]]
+                resumo = (
+                    f"🏛️ *ROTINA NOTURNA — CARTÓRIO*\n"
+                    f"Vou executar agora o envio de *{len(jobs)} título(s)* para protesto:\n\n"
+                    + "\n".join(linhas) +
+                    f"\n\nTentei negociar durante 20 dias sem sucesso. Executando agora..."
+                )
+                evo.enviar_mensagem_texto(operador_num, resumo)
+                print(f"   📋 Resumo noturno enviado: {len(jobs)} título(s).")
+
+            conn.close()
+
+            # 2. Processa a fila normalmente
+            processar_fila_cartorio(cnpj_filtro=cnpj)
+
+        except Exception as e:
+            print(f"   ❌ Erro na rotina noturna de cartório ({cnpj}): {e}")
 
 
 if __name__ == "__main__":

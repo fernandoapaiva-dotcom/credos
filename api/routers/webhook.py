@@ -327,10 +327,68 @@ async def receber_webhook_evolution(request: Request):
                         return {"status": "ok"}
 
 
-                if texto.startswith("✅ CONFIRMAR_"):
-                    comp_id = texto.split("_")[-1]
-                    await confirmar_pagamento(int(comp_id), "confirmar", u['empresa_cnpj'])
-                    evo_op.enviar_mensagem_texto(numero_raw, "✅ Comprovante confirmado com sucesso!")
+                if texto.startswith("✅ CONFIRMAR_PGTO_") or texto.startswith("✅ CONFIRMAR_"):
+                    # Formato: CONFIRMAR_PGTO_{cnpj}_{comp_id}_{titulo_id}_{num_cliente}
+                    try:
+                        partes = texto.replace("✅ CONFIRMAR_PGTO_","").replace("✅ CONFIRMAR_","").split("_")
+                        cnpj_alvo = partes[0]
+                        comp_id_str = partes[1] if len(partes) > 1 else None
+                        titulo_id_str = partes[2] if len(partes) > 2 else None
+                        num_cli = partes[3] if len(partes) > 3 else None
+
+                        conn_conf = conectar(cnpj_alvo)
+                        conn_conf.row_factory = __import__('sqlite3').Row
+                        agora_conf = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+                        # Move o título específico (ou todos se comp antigo sem titulo_id)
+                        if titulo_id_str and titulo_id_str.isdigit():
+                            titulo_row = conn_conf.cursor().execute(
+                                "SELECT numero_nf, valor, pagador FROM titulos WHERE id=?", (titulo_id_str,)
+                            ).fetchone()
+                            conn_conf.cursor().execute(
+                                "UPDATE titulos SET status='Pago' WHERE id=?", (titulo_id_str,)
+                            )
+                            info_pago = f"NF {titulo_row['numero_nf'] if titulo_row else '?'} de R$ {titulo_row['valor']:,.2f if titulo_row else 0}"
+                        else:
+                            # Legado: pega do comprovante
+                            comp_row = conn_conf.cursor().execute(
+                                "SELECT cliente_nome FROM comprovantes WHERE id=?", (comp_id_str,)
+                            ).fetchone() if comp_id_str else None
+                            cliente_pago = comp_row['cliente_nome'] if comp_row else None
+                            if cliente_pago:
+                                conn_conf.cursor().execute(
+                                    "UPDATE titulos SET status='Pago' WHERE pagador=? AND status='Aberto'",
+                                    (cliente_pago,)
+                                )
+                            info_pago = "todos os títulos em aberto"
+
+                        # Atualiza comprovante
+                        if comp_id_str and comp_id_str.isdigit():
+                            conn_conf.cursor().execute(
+                                "UPDATE comprovantes SET status='Confirmado', analisado_em=? WHERE id=?",
+                                (agora_conf, comp_id_str)
+                            )
+
+                        conn_conf.commit()
+
+                        # Obtém sessão do cliente para agradecer e encerrar
+                        if num_cli:
+                            sess_cli = _obter_sessao_ativa(cnpj_alvo, num_cli)
+                            if sess_cli:
+                                _atualizar_sessao(cnpj_alvo, sess_cli['id'], estado='concluido')
+                                evo_conf = EvolutionController(config=carregar_configuracoes_db(cnpj_alvo), nome_empresa_cliente=instance_name)
+                                evo_conf.enviar_mensagem_texto(
+                                    f"{num_cli}@s.whatsapp.net",
+                                    "*Analu (Assistente Virtual) Diz:*\n\n"
+                                    "Pagamento confirmado! Muito obrigada pela preferência. "
+                                    "Qualquer dúvida, estamos à disposição. 😊"
+                                )
+
+                        conn_conf.close()
+                        evo_op.enviar_mensagem_texto(numero_raw, f"✅ *Pagamento registrado!* {info_pago} marcado como PAGO no sistema.")
+                    except Exception as e_conf:
+                        _log_webhook(f"Erro ao confirmar pagamento: {e_conf}", "ERROR")
+                        evo_op.enviar_mensagem_texto(numero_raw, f"❌ Erro ao confirmar: {e_conf}")
                     return {"status": "ok", "action": "operador_confirmou"}
                 
                 if texto.startswith("❌ NEGAR_"):
@@ -391,23 +449,56 @@ async def receber_webhook_evolution(request: Request):
                     except Exception as e: _log_webhook(f"Erro ao solicitar negociação: {e}", "ERROR")
 
                 if texto.startswith("✅ CARTÓRIO_SIM_"):
-                    # ... (rest of cartorio logic)
                     partes = texto.split("_")
                     cnpj_target = partes[2]
                     cliente_slug = "_".join(partes[3:])
                     conn_c = conectar(cnpj_target)
+                    cfg_c = carregar_configuracoes_db(cnpj_target)
                     try:
-                        clientes = conn_c.cursor().execute("SELECT nome FROM clientes").fetchall()
+                        clientes = conn_c.cursor().execute("SELECT nome, whatsapp FROM clientes").fetchall()
                         nome_real = next((c_row[0] for c_row in clientes if c_row[0].replace(' ', '_')[:20] == cliente_slug), None)
+                        whatsapp_cli = next((c_row[1] for c_row in clientes if c_row[0].replace(' ', '_')[:20] == cliente_slug), None)
                         if nome_real:
-                            titulos = conn_c.cursor().execute("SELECT id FROM titulos WHERE pagador=? AND status='Aberto'", (nome_real,)).fetchall()
-                            agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            titulos = conn_c.cursor().execute(
+                                "SELECT id, numero_nf, valor FROM titulos WHERE pagador=? AND status='Aberto'",
+                                (nome_real,)
+                            ).fetchall()
+                            agora_c = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
                             for t_row in titulos:
-                                conn_c.cursor().execute("INSERT INTO cartorio_jobs (titulo_id, status_automacao, data_execucao) VALUES (?, 'Pendente', ?)", (t_row[0], agora))
+                                # Move para Cartório no banco
+                                conn_c.cursor().execute(
+                                    "UPDATE titulos SET status='Cartório', data_envio_cartorio=?, status_retorno_cartorio='Aguardando' WHERE id=?",
+                                    (agora_c, t_row[0])
+                                )
+                                # Insere na fila noturna
+                                conn_c.cursor().execute(
+                                    "INSERT INTO cartorio_jobs (titulo_id, status_automacao, data_execucao) VALUES (?, 'Agendado_Noturno', ?)",
+                                    (t_row[0], agora_c)
+                                )
                             conn_c.commit()
-                            evo_op = EvolutionController(config=config_op, nome_empresa_cliente=config_op.get('empresa_nome'))
-                            evo_op.enviar_mensagem_texto(numero_raw, f"✅ *Filado!* {len(titulos)} títulos de '{nome_real}' no cartório.")
-                    finally: conn_c.close()
+
+                            # Avisa o cliente sobre o protesto
+                            if whatsapp_cli:
+                                evo_cli = EvolutionController(config=cfg_c, nome_empresa_cliente=instance_name)
+                                numeros_cli = [n.strip() for n in whatsapp_cli.split(';') if n.strip()]
+                                nfs_str = ', '.join([f"NF {t[1]}" for t in titulos])
+                                for num_cli in numeros_cli:
+                                    evo_cli.enviar_mensagem_texto(
+                                        num_cli,
+                                        f"*Analu (Assistente Virtual) Diz:*\n\n"
+                                        f"Informamos que o débito referente à {nfs_str} foi encaminhado para *protesto em cartório*. "
+                                        f"Para regularizar sua situação, entre em contato com o nosso financeiro."
+                                    )
+
+                            evo_op.enviar_mensagem_texto(numero_raw,
+                                f"✅ *Filado!* {len(titulos)} título(s) de '{nome_real}' agendados para cartório. "
+                                f"O robô executará esta noite e te enviará um resumo antes de começar."
+                            )
+                        else:
+                            evo_op.enviar_mensagem_texto(numero_raw, f"❌ Não encontrei o cliente '{cliente_slug}'.")
+                    finally:
+                        conn_c.close()
                     return {"status": "ok"}
 
                 # ─── ACOMPANHAMENTO PÓS-CARTÓRIO ────────────────────────────
@@ -507,7 +598,65 @@ async def receber_webhook_evolution(request: Request):
         tem_comprovante = any(t in msg for t in ["imageMessage", "documentMessage"])
         if tem_comprovante:
             _log_webhook("Comprovante recebido via mídia.")
-            # ... handling logic (simplified for write)
+            try:
+                # Extrai dado da imagem ou documento
+                img_msg = msg.get("imageMessage", msg.get("documentMessage", {}))
+                b64_data = img_msg.get("jpegThumbnail") or img_msg.get("base64", "")
+                mimetype = img_msg.get("mimetype", "image/jpeg")
+                caption = img_msg.get("caption", "")
+
+                # Salva comprovante no banco
+                comp_id = _salvar_comprovante(cnpj, session_id, cliente_nome, b64_data or "", mimetype)
+
+                # Busca títulos em aberto do cliente
+                conn_comp = conectar(cnpj)
+                conn_comp.row_factory = __import__('sqlite3').Row
+                titulos_abertos = conn_comp.cursor().execute(
+                    "SELECT id, numero_nf, valor FROM titulos WHERE pagador=? AND status='Aberto'",
+                    (cliente_nome,)
+                ).fetchall()
+                titulos_abertos = [dict(t) for t in titulos_abertos]
+                conn_comp.close()
+
+                total_aberto = sum(t['valor'] for t in titulos_abertos)
+                op_num = config.get('operador_whatsapp', '')
+
+                if op_num:
+                    if len(titulos_abertos) == 1:
+                        # Caso simples: 1 título, confirmação direta
+                        tit = titulos_abertos[0]
+                        msg_op = (
+                            f"📸 *COMPROVANTE RECEBIDO*\n"
+                            f"Cliente: *{cliente_nome}*\n"
+                            f"Título: NF {tit['numero_nf']} | R$ {tit['valor']:,.2f}\n"
+                            f"Legenda: \"{caption}\"\n\n"
+                            f"Confirma o pagamento e move para PAGO?\n"
+                            f"✅ CONFIRMAR_PGTO_{cnpj}_{comp_id}_{tit['id']}_{numero_raw.split('@')[0]}\n"
+                            f"❌ NEGAR_PGTO_{cnpj}_{comp_id}\n\n"
+                        )
+                    else:
+                        # Múltiplos títulos: lista todos para o operador identificar qual
+                        linhas_tits = "\n".join([f"  • NF {t['numero_nf']} | R$ {t['valor']:,.2f} → CONFIRMAR_PGTO_{cnpj}_{comp_id}_{t['id']}_{numero_raw.split('@')[0]}" for t in titulos_abertos])
+                        msg_op = (
+                            f"📸 *COMPROVANTE RECEBIDO*\n"
+                            f"Cliente: *{cliente_nome}* | Total em aberto: R$ {total_aberto:,.2f}\n"
+                            f"Legenda: \"{caption}\"\n\n"
+                            f"O cliente tem *{len(titulos_abertos)} títulos* em aberto. Confirme qual foi pago:\n"
+                            + linhas_tits +
+                            f"\n\n❌ NEGAR_PGTO_{cnpj}_{comp_id} — para negar o comprovante"
+                        )
+
+                    evo.enviar_mensagem_texto(op_num, msg_op)
+
+                # Avisa o cliente que recebeu
+                evo.enviar_mensagem_texto(remote_jid,
+                    "*Analu (Assistente Virtual) Diz:*\n\nRecebi o seu comprovante! "
+                    "Já encaminhei para o nosso financeiro conferir. Em breve te confirmo o pagamento. Obrigada! 🙏"
+                )
+                _atualizar_sessao(cnpj, session_id, estado='comprovante_recebido')
+
+            except Exception as e:
+                _log_webhook(f"Erro ao processar comprovante: {e}", "ERROR")
             return {"status": "ok"}
 
         if texto:
@@ -640,10 +789,18 @@ async def receber_webhook_evolution(request: Request):
                 except Exception as e:
                     _log_webhook(f"Erro na orquestração de documentos: {e}", "ERROR")
             
+            # --- Captura PROMESSA de data de pagamento da IA ---
+            match_promessa = re.search(r'\[PROMESSA:(\d{4}-\d{2}-\d{2})\]', resp)
+            if match_promessa:
+                data_p = match_promessa.group(1)
+                _atualizar_sessao(cnpj, session_id, estado='aguardando_comprovante', data_promessa=data_p)
+                _log_webhook(f"Promessa de pagamento capturada: {data_p} para {cliente_nome}")
+
             # LIMPAR todas as tags internas — cliente NUNCA deve ver [AÇÃO:...] ou [Bebot:...]
             resp_limpa = re.sub(r'\[AÇÃO:[^\]]*\]', '', resp).strip()
             resp_limpa = re.sub(r'\[Bebot:[^\]]*\]', '', resp_limpa).strip()
             resp_limpa = re.sub(r'\[ACTION:[^\]]*\]', '', resp_limpa).strip()
+            resp_limpa = re.sub(r'\[PROMESSA:[^\]]*\]', '', resp_limpa).strip()  # Remove tag interna
             # Remove linhas em branco duplas deixadas pelas tags removidas
             resp_limpa = re.sub(r'\n{3,}', '\n\n', resp_limpa).strip()
             
