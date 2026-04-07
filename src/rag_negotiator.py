@@ -75,6 +75,7 @@ class RAGNegotiator:
                 return None, "Resposta vazia da IA."
             except Exception as e:
                 if "429" in str(e) and attempt < 2:
+                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [WARNING] Limite de velocidade do Google atingido. A Analu aguardará 35s em silêncio... (Tentativa {attempt+1}/3)")
                     time.sleep(35) # Tolerância pro Google API (exigiu 31s)
                     continue
                 return None, str(e)
