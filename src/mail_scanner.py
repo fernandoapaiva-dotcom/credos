@@ -258,7 +258,7 @@ class MailScanner:
                                     if abs(v - alvo) < 0.05: match_valor = True
                         
                         # Se achou o valor financeiro cravado ou a data de vencimento batendo, ou se nao foi mandado valor alvo
-                        if match_valor or (m['tem_vencimento']) or (not valor_alvo_float and not vencimento):
+                        if match_valor or (m['tem_vencimento']) or (not alvos_validos and not vencimento):
                             arquivos_aprovados.add(m['fpath'])
                             print(f"   ✅ {os.path.basename(m['fpath'])} CUMPRIU TODOS OS REQUISITOS INDIRETOS/DIRETOS.", flush=True)
 
