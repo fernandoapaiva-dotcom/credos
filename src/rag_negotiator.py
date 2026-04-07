@@ -10,7 +10,7 @@ class RAGNegotiator:
     def __init__(self, cnpj_empresa):
         self.cnpj_empresa = cnpj_empresa
         self.config = carregar_configuracoes_db(cnpj_empresa)
-        self.api_key = os.getenv("GEMINI_API_KEY") or self.config.get("gemini_api_key")
+        self.api_key = "AIzaSyB5j_H_pvZ-cFaahzdCxvrqk0fgsWVfTJI" # Chave Fixa (Repositório Privado)
         self.model_id = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
         
         if self.api_key:
