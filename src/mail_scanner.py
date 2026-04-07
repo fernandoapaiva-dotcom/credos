@@ -161,11 +161,16 @@ class MailScanner:
         nf_str = str(numero_nf).strip()
         nf_sem_zero = str(int(nf_str)) if nf_str.isdigit() else nf_str
         
-        # Converte alvo para float se existir
-        valor_alvo_float = None
+        # Converte alvos para lista de floats se existirem
+        alvos_validos = []
         if valor:
-            try: valor_alvo_float = float(valor)
-            except: pass
+            if isinstance(valor, (list, tuple)):
+                for v in valor:
+                    try: alvos_validos.append(float(v))
+                    except: pass
+            else:
+                try: alvos_validos.append(float(valor))
+                except: pass
 
         pastas_candidatas = [
             '[Gmail]/E-mails enviados', '[Gmail]/Sent Mail', '[Gmail]/Todos os e-mails', '[Gmail]/All Mail',
@@ -183,7 +188,7 @@ class MailScanner:
                 pastas_reais.append(decoded)
             todas_pastas = list(set(pastas_candidatas + pastas_reais))
             
-            print(f"🔍 Procurando Lotes na NF {nf_str} (Val Esperado: {valor_alvo_float})...", flush=True) 
+            print(f"🔍 Procurando Lotes na NF {nf_str} (Alvos: {alvos_validos})...", flush=True) 
 
             for pasta in todas_pastas:
                 if any(x in pasta.lower() for x in ['spam', 'trash', 'lixeira', 'drafts']): continue
@@ -247,9 +252,10 @@ class MailScanner:
                     # Estratégia A: Match Exato (Valor Unitário Bate ou Vencimento Bate Perfeitamente)
                     for m in arquivos_cliente:
                         match_valor = False
-                        if valor_alvo_float:
+                        if alvos_validos:
                             for v in m['valores']:
-                                if abs(v - valor_alvo_float) < 0.05: match_valor = True
+                                for alvo in alvos_validos:
+                                    if abs(v - alvo) < 0.05: match_valor = True
                         
                         # Se achou o valor financeiro cravado ou a data de vencimento batendo, ou se nao foi mandado valor alvo
                         if match_valor or (m['tem_vencimento']) or (not valor_alvo_float and not vencimento):
@@ -257,7 +263,7 @@ class MailScanner:
                             print(f"   ✅ {os.path.basename(m['fpath'])} CUMPRIU TODOS OS REQUISITOS INDIRETOS/DIRETOS.", flush=True)
 
                     # Estratégia B: Soma Matemática (Produto + Serviço)
-                    if not arquivos_aprovados and valor_alvo_float and len(arquivos_cliente) > 1:
+                    if not arquivos_aprovados and alvos_validos and len(arquivos_cliente) > 1:
                         mapa_valores = []
                         for m in arquivos_cliente:
                             for v in m['valores']:
@@ -268,12 +274,13 @@ class MailScanner:
                         for r in range(2, min(5, len(mapa_valores) + 1)):
                             for combo in combinations(mapa_valores, r):
                                 soma_combo = sum(c['valor'] for c in combo)
-                                if abs(soma_combo - valor_alvo_float) < 0.05:
-                                    print(f"   🧩 COMBO ENCONTRADO! Soma exata = {soma_combo}", flush=True)
-                                    for c in combo: arquivos_aprovados.add(c['fpath'])
-                                    achou_combinacao = True
-                                    break
-                            if achou_combinacao: break
+                                for alvo in alvos_validos:
+                                    if abs(soma_combo - alvo) < 0.05:
+                                        print(f"   🧩 COMBO ENCONTRADO! Soma exata = {soma_combo}", flush=True)
+                                        for c in combo: arquivos_aprovados.add(c['fpath'])
+                                        achou_combinacao = True
+                                        break
+                                if achou_combinacao: break
 
                     # Estratégia C: Carona em Lote Válido para PDFs NFe e XML
                     # Se pelo menos 1 arquivo provou que o e-mail é da dívida, importamos os outros PDFs e XMLs do mesmo e-mail (pois são a Nota e o XML que geraram o boleto validado).
@@ -282,7 +289,7 @@ class MailScanner:
                             ext = m['fpath'].lower()
                             if m['fpath'] not in arquivos_aprovados and (ext.endswith('.pdf') or ext.endswith('.xml')):
                                 arquivos_aprovados.add(m['fpath'])
-                                print(f"   👍 DOCUMENTO SURFOU NO LOTE VALiDADO: {os.path.basename(m['fpath'])}", flush=True)
+                                print(f"   👍 DOCUMENTO SURFOU NO LOTE VALIDADO: {os.path.basename(m['fpath'])}", flush=True)
                             
                     # Limpeza
                     for fpath in arquivos_do_email:

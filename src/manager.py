@@ -219,7 +219,7 @@ class Manager:
                     dados_cli.get('cnpj'), 
                     item['pagador'],
                     vencimento=item.get('vencimento'),
-                    valor=item.get('valor')
+                    valor=[item.get('principal'), item.get('total'), item.get('valor')]
                 )
                 if path:
                     arquivos_temp.extend(path)

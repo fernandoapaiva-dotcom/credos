@@ -598,7 +598,7 @@ async def receber_webhook_evolution(request: Request):
                             cliente_cnpj,
                             cliente_nome,
                             vencimento=it['vencimento'],
-                            valor=it['total']
+                            valor=[it['principal'], it['total']]
                         )
                         if arquivos:
                             for arq in arquivos:
