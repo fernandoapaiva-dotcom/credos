@@ -250,22 +250,31 @@ class RAGNegotiator:
         return resposta_limpa, None
 
     def classificar_intencao_concierge(self, mensagem_cliente):
-        """Classifica se o assunto é financeiro ou não."""
-        prompt = (
-            f"Analise a mensagem: '{mensagem_cliente}'\n\n"
-            "Responda APENAS com uma categoria:\n"
-            "SAUDACAO: oi, bom dia, tudo bem, olá, boa tarde, etc (sem menção a divida).\n"
-            "FINANCEIRO: boletos, pix, pagamentos, dívida, descontos, prazos, notas.\n"
-            "NAO_FINANCEIRO: suporte, peças, orçamentos novos, assuntos não financeiros.\n"
-            "COMPROVANTE: enviando comprovante ou anexo de pagamento."
-        )
-        resultado, _ = self._chamar_gemini(prompt)
-        if resultado:
-            r = resultado.strip().upper()
-            if "SAUDACAO" in r: return 'saudacao'
-            if "FINANCEIRO" in r and "NAO" not in r: return 'financeiro'
-            if "NAO_FINANCEIRO" in r: return 'nao_financeiro'
-            if "COMPROVANTE" in r: return 'comprovante'
+        """
+        Classifica se o assunto é financeiro ou não.
+        MÉTODO OTIMIZADO: Agora usa um motor local sem internet para poupar a cota da IA e não estourar o limite de burst do Google.
+        """
+        msg = mensagem_cliente.lower().strip()
+        
+        # 1. Financeiro Puro
+        fin_words = ['boleto', 'pix', 'nota', 'nf', 'fatura', 'pagar', 'pagamento', 'devo', 'divida', 'valor', 'atraso', 'desconto', 'parcelar', 'juros']
+        if any(w in msg for w in fin_words):
+            return 'financeiro'
+            
+        # 2. Comprovantes
+        if any(w in msg for w in ['comprovante', 'anexo', 'recibo', 'transferencia', 'segue']):
+            return 'comprovante'
+            
+        # 3. Não Financeiro (Suporte/Peças)
+        if any(w in msg for w in ['problema', 'suporte', 'garantia', 'peça', 'orcamento', 'atendente', 'humano', 'falar com']):
+            return 'nao_financeiro'
+            
+        # 4. Saudações Simples
+        saudacoes = ['oi', 'olá', 'ola', 'bom dia', 'boa tarde', 'boa noite', 'tudo bem', 'tudo joia', 'opa']
+        if len(msg) < 40 and any(w in msg for w in saudacoes):
+            return 'saudacao'
+            
+        # Fallback de segurança para não cobrar sem motivo
         return 'saudacao'
 
     def classificar_intencao(self, mensagem_cliente):
