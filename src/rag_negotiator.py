@@ -11,7 +11,7 @@ class RAGNegotiator:
         self.cnpj_empresa = cnpj_empresa
         self.config = carregar_configuracoes_db(cnpj_empresa)
         self.api_key = self.config.get("gemini_api_key")
-        self.model_id = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
+        self.model_id = "gemini-1.5-flash-latest"
         
         if self.api_key:
             self.client = genai.Client(api_key=self.api_key)
@@ -75,7 +75,7 @@ class RAGNegotiator:
                 return None, "Resposta vazia da IA."
             except Exception as e:
                 if "429" in str(e) and attempt < 2:
-                    time.sleep(5 * (attempt + 1))
+                    time.sleep(25) # Tolerância pro Google API
                     continue
                 return None, str(e)
         return None, "Tentativas esgotadas."
@@ -222,13 +222,14 @@ class RAGNegotiator:
         system_instruction += "\n\nREGRA CRÍTICA DE SOBREVIVÊNCIA: NUNCA repita a mesma frase ou pergunta de cobrança que você já usou nas últimas mensagens do histórico."
         
         # Hook de Detecção de Envio de Documento
-        prompt += (
-            "\n\n[ATENÇÃO FINAL PARA O SEU TURNO]: "
-            "\n1. INTERPRETE: O cliente quer documento? Ofereça WhatsApp ou E-mail."
-            "\n2. INTERPRETE: Ele passou um e-mail? Use |||ACAO: ENVIAR_DOCUMENTOS_EMAIL: [email]|||."
-            "\n3. SEJA DIRETA: Se ele perguntou o valor, diga o valor com centavos. Sem rodeios."
-            "\n4. NUNCA faça o cliente esperar ('Só um minuto', 'Puxando aqui'). Você já tem os dados na mão. RESPOOOOONDA."
-        )
+        if intent != 'saudacao' and num_trocas > 0:
+            prompt += (
+                "\n\n[ATENÇÃO FINAL PARA O SEU TURNO]: "
+                "\n1. INTERPRETE: O cliente quer documento? Ofereça WhatsApp ou E-mail."
+                "\n2. INTERPRETE: Ele passou um e-mail? Use |||ACAO: ENVIAR_DOCUMENTOS_EMAIL: [email]|||."
+                "\n3. SEJA DIRETA: Se ele perguntou o valor, diga o valor com centavos. Sem rodeios."
+                "\n4. NUNCA faça o cliente esperar ('Só um minuto', 'Puxando aqui'). Você já tem os dados na mão. RESPOOOOONDA."
+            )
             
         resposta, erro = self._chamar_gemini(prompt, system_instruction)
         if erro:
@@ -252,17 +253,19 @@ class RAGNegotiator:
         prompt = (
             f"Analise a mensagem: '{mensagem_cliente}'\n\n"
             "Responda APENAS com uma categoria:\n"
-            "FINANCEIRO: boletos, pix, pagamentos, dívida, descontos, prazos.\n"
-            "NAO_FINANCEIRO: suporte, peças, orçamentos novos, saudações simples, assuntos não financeiros.\n"
+            "SAUDACAO: oi, bom dia, tudo bem, olá, boa tarde, etc (sem menção a divida).\n"
+            "FINANCEIRO: boletos, pix, pagamentos, dívida, descontos, prazos, notas.\n"
+            "NAO_FINANCEIRO: suporte, peças, orçamentos novos, assuntos não financeiros.\n"
             "COMPROVANTE: enviando comprovante ou anexo de pagamento."
         )
         resultado, _ = self._chamar_gemini(prompt)
         if resultado:
             r = resultado.strip().upper()
+            if "SAUDACAO" in r: return 'saudacao'
             if "FINANCEIRO" in r and "NAO" not in r: return 'financeiro'
             if "NAO_FINANCEIRO" in r: return 'nao_financeiro'
             if "COMPROVANTE" in r: return 'comprovante'
-        return 'financeiro'
+        return 'saudacao'
 
     def classificar_intencao(self, mensagem_cliente):
         prompt = (
