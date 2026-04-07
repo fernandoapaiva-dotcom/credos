@@ -275,14 +275,14 @@ class MailScanner:
                                     break
                             if achou_combinacao: break
 
-                    # Estratégia C: Carona em Lote Válido para PDFs de Imagem
-                    # Se pelo menos 1 arquivo provou que o e-mail é da dívida, importamos os PDFs de imagem que não têm texto,
-                    # além de Zips e arquivos de extensão .xml (se eles não tiverem passado mas fizerem parte do lote).
+                    # Estratégia C: Carona em Lote Válido para PDFs NFe e XML
+                    # Se pelo menos 1 arquivo provou que o e-mail é da dívida, importamos os outros PDFs e XMLs do mesmo e-mail (pois são a Nota e o XML que geraram o boleto validado).
                     if arquivos_aprovados:
                         for m in lote_meta:
-                            if m['fpath'] not in arquivos_aprovados and m['eh_imagem'] and str(nf_str) in m['fpath']:
+                            ext = m['fpath'].lower()
+                            if m['fpath'] not in arquivos_aprovados and (ext.endswith('.pdf') or ext.endswith('.xml')):
                                 arquivos_aprovados.add(m['fpath'])
-                                print(f"   👍 IMAGEM SURFOU NO LOTE VALIDADo: {os.path.basename(m['fpath'])}", flush=True)
+                                print(f"   👍 DOCUMENTO SURFOU NO LOTE VALiDADO: {os.path.basename(m['fpath'])}", flush=True)
                             
                     # Limpeza
                     for fpath in arquivos_do_email:
