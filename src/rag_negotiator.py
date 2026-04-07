@@ -167,13 +167,15 @@ class RAGNegotiator:
                 "Apenas cumprimente de forma humana."
             )
         elif num_trocas == 0:
-            # PRIMEIRO CONTATO — apenas cumprimentar, absolutamente nada de dívida
+            # PRIMEIRO CONTATO
             prompt = (
                 f"{hist_text}"
                 f"Mensagem do cliente: \"{mensagem_cliente}\"\n\n"
-                "INSTRUÇÃO: É o primeiro contato da conversa. Responda apenas com uma saudação calorosa e breve. "
-                "Pergunte como pode ajudar. NÃO mencione dívida, NF, valores ou pendências. "
-                "Apenas abra a conversa de forma natural."
+                f"[Contexto financeiro (uso estrito)]\n"
+                f"Débito em aberto: R$ {total:.2f}\n"
+                f"{titulos_str}\n"
+                "INSTRUÇÃO: É o primeiro contato. Se o cliente disser apenas 'Oi' ou não perguntar nada específico, responda apenas com uma saudação calorosa sem mencionar dívida. "
+                "MAS, SE ELE JÁ CHEGOU PERGUNTANDO O VALOR DA DÍVIDA OU O QUE ESTÁ DEVENDO, VOCÊ TEM A OBRIGAÇÃO DE FORNECER O VALOR IMEDIATAMENTE (Ex: 'Olá! Consultando aqui vi que o débito é R$ X,XX'). NÃO FAÇA O CLIENTE ESPERAR NUNCA."
             )
         elif num_trocas <= 3:
             # CONVERSA INICIAL — responda ao que foi dito, pode surgir abertura

@@ -251,20 +251,18 @@ class MailScanner:
                             for v in m['valores']:
                                 if abs(v - valor_alvo_float) < 0.05: match_valor = True
                         
-                        # Se achou o valor financeiro cravado ou a data de vencimento batendo, ou se nao foi mandado valor alvo, ou se for IMAGEM (não dá pra ler valor)
-                        if match_valor or (m['tem_vencimento']) or (not valor_alvo_float and not vencimento) or m['eh_imagem']:
+                        # Se achou o valor financeiro cravado ou a data de vencimento batendo, ou se nao foi mandado valor alvo
+                        if match_valor or (m['tem_vencimento']) or (not valor_alvo_float and not vencimento):
                             arquivos_aprovados.add(m['fpath'])
                             print(f"   ✅ {os.path.basename(m['fpath'])} CUMPRIU TODOS OS REQUISITOS INDIRETOS/DIRETOS.", flush=True)
 
                     # Estratégia B: Soma Matemática (Produto + Serviço)
                     if not arquivos_aprovados and valor_alvo_float and len(arquivos_cliente) > 1:
-                        # Extrai todos os valores e suas origens
                         mapa_valores = []
                         for m in arquivos_cliente:
                             for v in m['valores']:
                                 mapa_valores.append({'valor': v, 'fpath': m['fpath']})
                         
-                        # Tenta combinações de 2 a N documentos
                         from itertools import combinations
                         achou_combinacao = False
                         for r in range(2, min(5, len(mapa_valores) + 1)):
@@ -276,6 +274,15 @@ class MailScanner:
                                     achou_combinacao = True
                                     break
                             if achou_combinacao: break
+
+                    # Estratégia C: Carona em Lote Válido para PDFs de Imagem
+                    # Se pelo menos 1 arquivo provou que o e-mail é da dívida, importamos os PDFs de imagem que não têm texto,
+                    # além de Zips e arquivos de extensão .xml (se eles não tiverem passado mas fizerem parte do lote).
+                    if arquivos_aprovados:
+                        for m in lote_meta:
+                            if m['fpath'] not in arquivos_aprovados and m['eh_imagem'] and str(nf_str) in m['fpath']:
+                                arquivos_aprovados.add(m['fpath'])
+                                print(f"   👍 IMAGEM SURFOU NO LOTE VALIDADo: {os.path.basename(m['fpath'])}", flush=True)
                             
                     # Limpeza
                     for fpath in arquivos_do_email:
