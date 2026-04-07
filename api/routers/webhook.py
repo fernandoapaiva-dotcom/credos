@@ -627,6 +627,7 @@ async def receber_webhook_evolution(request: Request):
 
                     elif not is_email_only:
                         _log_webhook("Nenhum arquivo encontrado no Pooling.")
+                        resp = "Poxa, peço sinceras desculpas! Eu tentei anexar a sua nota fiscal e boleto aqui, mas parece que os arquivos em PDF ainda não estão disponíveis no meu sistema no momento. Vou deixar um alerta para que um humano verifique isso para você e envie os arquivos manualmente em breve, tudo bem?"
                 except Exception as e:
                     _log_webhook(f"Erro na orquestração de documentos: {e}", "ERROR")
             
