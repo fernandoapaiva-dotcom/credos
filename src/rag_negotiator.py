@@ -75,7 +75,7 @@ class RAGNegotiator:
                 return None, "Resposta vazia da IA."
             except Exception as e:
                 if "429" in str(e) and attempt < 2:
-                    time.sleep(25) # Tolerância pro Google API
+                    time.sleep(35) # Tolerância pro Google API (exigiu 31s)
                     continue
                 return None, str(e)
         return None, "Tentativas esgotadas."
