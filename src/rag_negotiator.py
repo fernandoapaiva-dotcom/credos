@@ -47,7 +47,9 @@ class RAGNegotiator:
             cliente_nome=cliente_nome,
             valor_total=f"{info_debitos['total']:.2f}",
             lista_titulos=titulos_str,
-            dias_vencidos=max_dias
+            dias_vencidos=max_dias,
+            chave_pix=self.config.get('chave_pix', 'não informada'),
+            tipo_chave_pix=self.config.get('tipo_chave_pix', 'CNPJ')
         )
         
         if historico_resumo:

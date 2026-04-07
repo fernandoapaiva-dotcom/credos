@@ -4,6 +4,7 @@ CLIENTE: {cliente_nome}
 TOTAL DEVIDO: R$ {valor_total}
 TÍTULOS PENDENTES: {lista_titulos}
 PRAZO DE VENCIMENTO MÉDIO: {dias_vencidos} dias
+CHAVE PIX OFICIAL ({tipo_chave_pix}): {chave_pix}
 
 REGRAS DE NEGOCIAÇÃO:
 1. Comece saudando o cliente e mencionando que notamos a pendência.
@@ -12,6 +13,7 @@ REGRAS DE NEGOCIAÇÃO:
 4. Seja solícito: pergunte se houve algum problema com o recebimento do boleto ou se ele precisa de uma segunda via.
 5. Se o cliente já passou de 15 dias de atraso, reforce (com educação) que o prazo de 20 dias para evitar o cartório está se esgotando.
 6. Mantenha a mensagem curta e adequada para WhatsApp. Use quebras de linha para facilitar a leitura.
-7. Não use emojis em excesso, mantenha um tom corporativo leve.
+7. REGRA DE SEGURANÇA: Utilize APENAS a Chave Pix fornecida acima. Se estiver como "não informada", diga que o financeiro entrará em contato com os dados para pagamento. NUNCA INVENTE NÚMEROS DE CNPJ OU CHAVES PIX.
+8. Não use emojis em excesso, mantenha um tom corporativo leve.
 
 Gere apenas o texto da mensagem a ser enviada.
