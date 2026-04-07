@@ -13,7 +13,13 @@ class MailScanner:
         
         self.base_temp = "temp_data"
         self.pasta_destino = os.path.join(self.base_temp, "attachments")
-        if not os.path.exists(self.pasta_destino): os.makedirs(self.pasta_destino)
+        
+        # LIMPEZA ABRUPTA DO CACHE FÍSICO
+        import shutil
+        if os.path.exists(self.pasta_destino):
+            try: shutil.rmtree(self.pasta_destino)
+            except: pass
+        os.makedirs(self.pasta_destino, exist_ok=True)
 
     def conectar(self):
         try:
@@ -232,6 +238,17 @@ class MailScanner:
                 if not msg_data or not msg_data[0]: continue
                 
                 msg = email.message_from_bytes(msg_data[0][1])
+                
+                # PREVENÇÃO DE LOOP DE ANEXOS: Ignora e-mails automáticos do próprio robô
+                subj_decode = decode_header(msg.get("Subject", ""))
+                txt_subject = ""
+                for bytes_str, charset in subj_decode:
+                    if isinstance(bytes_str, bytes):
+                        txt_subject += bytes_str.decode(charset or 'utf-8', errors='ignore')
+                    else:
+                        txt_subject += str(bytes_str)
+                if "Documentos Fiscais - Credos" in txt_subject: continue
+                
                 for part in msg.walk():
                     if part.get_content_maintype() == 'multipart' or part.get('Content-Disposition') is None: continue
                     
