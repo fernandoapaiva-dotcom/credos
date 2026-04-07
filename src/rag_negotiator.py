@@ -11,7 +11,7 @@ class RAGNegotiator:
         self.cnpj_empresa = cnpj_empresa
         self.config = carregar_configuracoes_db(cnpj_empresa)
         self.api_key = self.config.get("gemini_api_key")
-        self.model_id = "gemini-1.5-flash"
+        self.model_id = "gemini-2.0-flash"
         
         if self.api_key:
             self.client = genai.Client(api_key=self.api_key)
