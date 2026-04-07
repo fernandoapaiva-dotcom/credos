@@ -160,15 +160,14 @@ class RAGNegotiator:
 
         # ─── PROMPT DO MOMENTO ─────────────────────────────────────────────────
         if intent == 'saudacao':
-            # SAUDAÇÃO PURA — apenas cumprimentar de volta de forma natural
-            prompt = (
-                f"{hist_text}"
-                f"Mensagem do cliente: \"{mensagem_cliente}\"\n\n"
-                "INSTRUÇÃO: O cliente mandou apenas uma saudação curta ('Oi', 'Bom dia', etc). "
-                "Responda cumprimentando de volta de forma natural. Se a conversa já estiver em andamento, responda de acordo com o contexto anterior. "
-                "Resgate o assunto da dívida apenas se o cliente perguntar ou se houver abertura. "
-                "Apenas cumprimente de forma humana."
-            )
+            # SAUDAÇÃO PURA — Não gasta cota da API. Responde direto do código.
+            import random
+            respostas = [
+                "Oi! Tudo bem? Como posso ajudar você hoje?",
+                "Olá! Tudo ótimo por aqui 😊 Em que posso ser útil?",
+                "Oi, tudo bem? Como posso ajudar a sua empresa?"
+            ]
+            return random.choice(respostas), None
         elif num_trocas == 0:
             # PRIMEIRO CONTATO
             prompt = (
