@@ -308,69 +308,43 @@ class MailScanner:
                             try: os.remove(fpath)
                             except: pass
 
-            # --- ETAPA 3: Decisão de Entrega (Pooling Inteligente) ---
+            # --- ETAPA 3: FILTRO SNIPER (REGRA ÚNICA E INFALÍVEL) ---
+            # Um arquivo SÓ É APROVADO se o número da NF alvo estiver EXPLÍCITO no nome.
+            # Não há carona, scores ou heurísticas. Simples e definitivo.
             arquivos_aprovados = set()
-            
-            # 1. Match Ouro (Direto)
-            for m in [x for x in pool_metadados if x['score'] >= 30]:
-                arquivos_aprovados.add(m['fpath'])
-                print(f"   🏆 Lote Ouro Identificado: {os.path.basename(m['fpath'])}", flush=True)
+            nf_num = nf_str.lstrip('0')  # Ex: "1237" sem zeros à esquerda
 
-            # 2. Combinação (Produto + Serviço)
-            if alvos_validos and not any(m['score'] >= 30 for m in pool_metadados):
-                from itertools import combinations
-                # Só combina arquivos que pertençam ao cliente
-                candidatos = [m for m in pool_metadados if m['pertence_cliente'] and m['fpath'] not in arquivos_aprovados]
-                achou_soma = False
-                for alvo in alvos_validos:
-                    for r in range(1, min(4, len(candidatos) + 1)):
-                        for combo in combinations(candidatos, r):
-                            soma = sum(max(c['valores']) if c['valores'] else 0 for c in combo)
-                            if abs(soma - alvo) < 0.05:
-                                print(f"   🧩 Par Perfeito (Produto+Serviço) Encontrado! Soma: {soma}", flush=True)
-                                for c in combo: arquivos_aprovados.add(c['fpath'])
-                                achou_soma = True; break
-                        if achou_soma: break
-                    if achou_soma: break
-
-            # 3. Lei da Carona (Boleto/XML do mesmo e-mail de uma NF aprovada)
-            # Mas com FILTRO RIGOROSO: Não deixa carona de outras NFs
-            ids_aprovados = set()
-            for f in arquivos_aprovados:
-                base = os.path.basename(f)
-                if base.count('_') >= 2: ids_aprovados.add(base.split('_')[1])
-            
             for m in pool_metadados:
-                if m['fpath'] in arquivos_aprovados: continue
-                
-                # Só dá carona se for do mesmo e-mail E não for explicitamente de outra NF
-                base_m = os.path.basename(m['fpath'])
-                if base_m.count('_') >= 2:
-                    id_m = base_m.split('_')[1]
-                    if id_m in ids_aprovados:
-                        # Se não detectou NF errada, pode ir
-                        if not m.get('outra_nf_detectada'):
-                            arquivos_aprovados.add(m['fpath'])
-                        elif m.get('tem_nf'): # Ou se detectou a nossa NF também
-                            arquivos_aprovados.add(m['fpath'])
+                bname = os.path.basename(m['fpath'])
+                aprovado = False
 
-            # --- ETAPA 4: Auditoria de Segurança Final (NUCLEAR) ---
-            # Remove qualquer arquivo que tenha um número de NF intruso no caminho físico
-            # exceto se o número alvo também estiver presente em destaque.
-            lista_final = list(arquivos_aprovados)
-            for f in lista_final:
-                bname = os.path.basename(f)
-                # Se o nome do arquivo tem uma sequência de 44 dígitos (Chave de Acesso)
-                chaves_f = re.findall(r'\d{44}', bname)
-                for cf in chaves_f:
-                    nf_real = cf[25:34].lstrip('0')
-                    if nf_real != nf_str:
-                        print(f"   ☢️  FILTRO NUCLEAR: Deletando intruso detectado na chave: {nf_real} vs {nf_str}", flush=True)
-                        if f in arquivos_aprovados: arquivos_aprovados.remove(f)
-                        try: os.remove(f)
-                        except: pass
-            
-            # Limpeza dos que sobraram no pool mas não aprovados
+                # Regra 1: Chave de Acesso de 44 dígitos (padrão SEFAZ) no nome
+                chaves_no_nome = re.findall(r'\d{44}', bname)
+                if chaves_no_nome:
+                    for chave in chaves_no_nome:
+                        # Dígitos 26 a 34 (índices 25:34) = Número da NF na chave
+                        nf_na_chave = str(int(chave[25:34]))
+                        if nf_na_chave == nf_num:
+                            aprovado = True
+                            print(f"   ✅ APROVADO (chave SEFAZ NF={nf_na_chave}): {bname[:70]}", flush=True)
+                        else:
+                            aprovado = False
+                            print(f"   ❌ REJEITADO (chave diz NF {nf_na_chave}, pedido={nf_num}): {bname[:70]}", flush=True)
+                else:
+                    # Regra 2: Sem chave de acesso — verifica se o número aparece no nome
+                    if nf_num in bname or nf_str in bname:
+                        aprovado = True
+                        print(f"   ✅ APROVADO (NF no nome): {bname[:70]}", flush=True)
+                    else:
+                        print(f"   ❌ REJEITADO (NF {nf_num} ausente no nome): {bname[:70]}", flush=True)
+
+                if aprovado:
+                    arquivos_aprovados.add(m['fpath'])
+                else:
+                    try: os.remove(m['fpath'])
+                    except: pass
+
+            # Limpeza de temporários não aprovados
             for fpath in arquivos_temp_lot:
                 if fpath not in arquivos_aprovados and os.path.exists(fpath):
                     try: os.remove(fpath)
@@ -379,8 +353,8 @@ class MailScanner:
             try: mail.close()
             except: pass
             mail.logout()
-            
-            return list(set(arquivos_aprovados))
+
+            return list(arquivos_aprovados)
 
         except Exception as e:
             if "CLOSE" not in str(e): print(f"Erro Scanner Pooling: {e}", flush=True)
