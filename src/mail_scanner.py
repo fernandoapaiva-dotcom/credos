@@ -137,8 +137,17 @@ class MailScanner:
         # 2. Número da NF
         if nf_alvo:
             nf_search = str(nf_alvo)
-            if re.search(rf'\b0*{nf_search}\b', texto) or f" {nf_search} " in fname_limpo.replace('-', ' ').replace('_', ' '):
+            # Match exato do número da NF no texto ou nome do arquivo
+            if re.search(rf'\b0*{nf_search}\b', texto) or f"{nf_search}" in fname_limpo:
                 meta['tem_nf'] = True
+            
+            # DETECÇÃO DE NF CONFLITANTE: Se achar outro número de 4 dígitos que NÃO é o alvo
+            outras_nfs = re.findall(r'\b\d{4}\b', texto + " " + fname_limpo)
+            outras_nfs = [n for n in outras_nfs if n.lstrip('0') != nf_search.lstrip('0') and n.lstrip('0') != "2024" and n.lstrip('0') != "2025" and n.lstrip('0') != "2026"]
+            if outras_nfs:
+                meta['outra_nf_detectada'] = outras_nfs[0]
+            else:
+                meta['outra_nf_detectada'] = None
 
         # 3. Extração de Valores e Vencimento
         if texto:
@@ -270,12 +279,16 @@ class MailScanner:
                         # Sistema de Scoring para filtrar lixo (Email de outra NF que apenas cita a 1237)
                         score = 0
                         if meta['pertence_cliente']: score += 10
-                        if meta['tem_nf']: score += 15
-                        if any(abs(v - alvo) < 0.05 for v in meta['valores'] for alvo in alvos_validos): score += 10
+                        if meta.get('tem_nf'): score += 25  # Aumentado peso da NF
+                        if any(abs(v - alvo) < 0.05 for v in meta['valores'] for alvo in alvos_validos): score += 15
                         if meta['tem_vencimento']: score += 5
                         
+                        # PENALIDADE CRÍTICA: Se detectou outra NF que não é a nossa, derruba o score
+                        if meta.get('outra_nf_detectada') and not meta.get('tem_nf'):
+                            score -= 40
+                        
                         meta['score'] = score
-                        if score >= 10: 
+                        if score >= 15: 
                             pool_metadados.append(meta)
                             arquivos_temp_lot.append(fpath)
                         else:
@@ -308,18 +321,25 @@ class MailScanner:
                     if achou_soma: break
 
             # 3. Lei da Carona (Boleto/XML do mesmo e-mail de uma NF aprovada)
+            # Mas com FILTRO RIGOROSO: Não deixa carona de outras NFs
             ids_aprovados = set()
             for f in arquivos_aprovados:
                 base = os.path.basename(f)
                 if base.count('_') >= 2: ids_aprovados.add(base.split('_')[1])
             
             for m in pool_metadados:
+                if m['fpath'] in arquivos_aprovados: continue
+                
+                # Só dá carona se for do mesmo e-mail E não for explicitamente de outra NF
                 base_m = os.path.basename(m['fpath'])
                 if base_m.count('_') >= 2:
                     id_m = base_m.split('_')[1]
                     if id_m in ids_aprovados:
-                         if m['fpath'].lower().endswith(('.pdf', '.xml', '.boleto')):
-                             arquivos_aprovados.add(m['fpath'])
+                        # Se não detectou NF errada, pode ir
+                        if not m.get('outra_nf_detectada'):
+                            arquivos_aprovados.add(m['fpath'])
+                        elif m.get('tem_nf'): # Ou se detectou a nossa NF também
+                            arquivos_aprovados.add(m['fpath'])
 
             # Limpeza
             for fpath in arquivos_temp_lot:
