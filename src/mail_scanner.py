@@ -130,24 +130,37 @@ class MailScanner:
         elif nome_curto and len(nome_curto) > 3 and (nome_curto in texto_upper or nome_curto in fname_limpo.upper()):
             meta['pertence_cliente'] = True
 
-        # Para PDFs imagem, confiamos no título para a NF
-        if not texto and meta['pertence_cliente']:
-            meta['tem_nf'] = True
-            
-        # 2. Número da NF
+        # 2. Número da NF (Sniper de Precisão)
         if nf_alvo:
-            nf_search = str(nf_alvo)
-            # Match exato do número da NF no texto ou nome do arquivo
-            if re.search(rf'\b0*{nf_search}\b', texto) or f"{nf_search}" in fname_limpo:
-                meta['tem_nf'] = True
+            nf_search = str(nf_alvo).lstrip('0')
             
-            # DETECÇÃO DE NF CONFLITANTE: Se achar outro número de 4 dígitos que NÃO é o alvo
-            outras_nfs = re.findall(r'\b\d{4}\b', texto + " " + fname_limpo)
-            outras_nfs = [n for n in outras_nfs if n.lstrip('0') != nf_search.lstrip('0') and n.lstrip('0') != "2024" and n.lstrip('0') != "2025" and n.lstrip('0') != "2026"]
-            if outras_nfs:
-                meta['outra_nf_detectada'] = outras_nfs[0]
-            else:
-                meta['outra_nf_detectada'] = None
+            # Tenta achar Chaves de Acesso (44 dígitos) no texto ou nome
+            chaves = re.findall(r'\d{44}', texto_limpo + " " + fname_limpo)
+            nfs_reais_na_chave = []
+            for c in chaves:
+                n_extraido = c[25:34].lstrip('0')
+                if n_extraido: nfs_reais_na_chave.append(n_extraido)
+            
+            if nfs_reais_na_chave:
+                if any(n == nf_search for n in nfs_reais_na_chave):
+                    meta['tem_nf'] = True
+                else:
+                    # Se achou uma chave de acesso e o número NÃO é o nosso, é um conflito fatal
+                    meta['outra_nf_detectada'] = nfs_reais_na_chave[0]
+            
+            # Fallback: Busca padrão se não achou chaves de acesso
+            if not meta['tem_nf'] and not meta.get('outra_nf_detectada'):
+                if re.search(rf'\b0*{nf_search}\b', texto) or nf_search in fname_limpo:
+                    meta['tem_nf'] = True
+                
+                # BUSCA DE CONFLITO EM NÚMEROS SOLTOS: 
+                # Procura outros números de 4 dígitos (comum em NFs dessa empresa)
+                outras_nfs = re.findall(r'\b\d{3,5}\b', texto + " " + fname_limpo)
+                outras_nfs = [n.lstrip('0') for n in outras_nfs if n.lstrip('0') != nf_search and len(n.lstrip('0')) >= 3 and n not in ["2024", "2025", "2026"]]
+                if outras_nfs and not meta['tem_nf']:
+                    meta['outra_nf_detectada'] = outras_nfs[0]
+                else:
+                    meta['outra_nf_detectada'] = None
 
         # 3. Extração de Valores e Vencimento
         if texto:
@@ -341,9 +354,25 @@ class MailScanner:
                         elif m.get('tem_nf'): # Ou se detectou a nossa NF também
                             arquivos_aprovados.add(m['fpath'])
 
-            # Limpeza
+            # --- ETAPA 4: Auditoria de Segurança Final (NUCLEAR) ---
+            # Remove qualquer arquivo que tenha um número de NF intruso no caminho físico
+            # exceto se o número alvo também estiver presente em destaque.
+            lista_final = list(arquivos_aprovados)
+            for f in lista_final:
+                bname = os.path.basename(f)
+                # Se o nome do arquivo tem uma sequência de 44 dígitos (Chave de Acesso)
+                chaves_f = re.findall(r'\d{44}', bname)
+                for cf in chaves_f:
+                    nf_real = cf[25:34].lstrip('0')
+                    if nf_real != nf_str:
+                        print(f"   ☢️  FILTRO NUCLEAR: Deletando intruso detectado na chave: {nf_real} vs {nf_str}", flush=True)
+                        if f in arquivos_aprovados: arquivos_aprovados.remove(f)
+                        try: os.remove(f)
+                        except: pass
+            
+            # Limpeza dos que sobraram no pool mas não aprovados
             for fpath in arquivos_temp_lot:
-                if fpath not in arquivos_aprovados:
+                if fpath not in arquivos_aprovados and os.path.exists(fpath):
                     try: os.remove(fpath)
                     except: pass
 
