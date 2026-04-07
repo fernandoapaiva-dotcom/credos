@@ -185,9 +185,10 @@ class RAGNegotiator:
                 f"[Contexto interno — use com cuidado, no momento certo]\n"
                 f"Débito em aberto: R$ {total:.2f} ({dias_max_atraso} dias de atraso)\n"
                 f"{titulos_str}\n"
-                "INSTRUÇÃO: Responda ao que o cliente disse agora. Se a conversa der abertura natural, "
-                "você PODE mencionar sutilmente que tem 'um assunto financeiro pra tratar' — mas sem detalhar ainda. "
-                "Não force. Deixe fluir."
+                "INSTRUÇÃO: Responda ao que o cliente disse de forma natural e sem enrolar. "
+                "SE O CLIENTE PERGUNTAR DIRETAMENTE sobre valores, débitos ou pendências, VOCÊ DEVE RESPONDER COM O VALOR IMEDIATAMENTE (Ex: 'O seu débito atual é de R$ X,XX'). NÃO peça para esperar e não enrole. "
+                "Cado ele não tenha perguntado de dívida ainda, você pode mencionar sutilmente que tem um assunto financeiro pra tratar — mas sem detalhar demais. Deixe fluir."
+
             )
         elif intent == 'suporte_para_financeiro':
             # Analu atuando como "ombro amigo" do suporte, ouvindo o problema e puxando pra dívida
