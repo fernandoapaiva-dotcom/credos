@@ -11,7 +11,7 @@ class RAGNegotiator:
         self.cnpj_empresa = cnpj_empresa
         self.config = carregar_configuracoes_db(cnpj_empresa)
         self.api_key = self.config.get("gemini_api_key")
-        self.model_id = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+        self.model_id = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
         
         if self.api_key:
             self.client = genai.Client(api_key=self.api_key)
@@ -150,9 +150,11 @@ class RAGNegotiator:
             "\n- Nunca mencione nomes de colegas internos."
             "\n- IMPORTANTE: NÃO FAÇA ROLEPLAY. Você TEM os dados na mesma hora. NUNCA Diga 'Um momento, vou verificar', 'So um instante estou puxando as infos'. APENAS DÊ A RESPOSTA (ex: 'Seu débito é de R$ 10,00')."
             "\n\nSUA MISSÃO DOCUMENTAL:"
-            "\n- Se o cliente pedir um documento (NF, Boleto, Segunda Via) ou você se comprometer a enviá-lo, VOCÊ TEM O DEVER de incluir a tag EXATA: |||ACAO: BUSCAR_NF_EMAIL||| no final do seu texto."
-            "\n- Se você enviar a tag de documento, evite cobrar valores agressivamente na mesma mensagem."
-            "\n- Nunca diga que não consegue enviar arquivos por aqui. Você consegue, apenas coloque a tag."
+            "\n- Quando o cliente pedir um documento (NF, Boleto, etc), SEJA AFIADA e pergunte se ele prefere receber por aqui no WhatsApp ou se prefere que envie para o E-mail dele."
+            "\n- Se ele escolher E-mail mas não informou qual, PERGUNTE: 'Qual o melhor e-mail para eu te mandar?'."
+            "\n- Se ele informar o e-mail, inclua a tag: |||ACAO: ENVIAR_DOCUMENTOS_EMAIL: endereco@email.com|||."
+            "\n- Se ele quiser por aqui, inclua a tag: |||ACAO: BUSCAR_NF_EMAIL|||."
+            "\n- Nunca diga que não consegue enviar arquivos. Você consegue tudo via sistema, apenas use as tags acima."
         )
 
         # ─── PROMPT DO MOMENTO ─────────────────────────────────────────────────
@@ -221,11 +223,11 @@ class RAGNegotiator:
         
         # Hook de Detecção de Envio de Documento
         prompt += (
-            "\n\n[ATENÇÃO FINAL PARA O SEU TURNO]: Reforçando sua missão documental: "
-            "Se, interpretando o contexto agora, o cliente consentiu, aceitou ou pediu o envio da Nota Fiscal/Boleto, "
-            "você TEM que adicionar |||ACAO: BUSCAR_NF_EMAIL||| no seu texto. "
-            "Seja natural ('Estou enviando!'). "
-            "E Lembre-se: SE ele perguntou o que deve/qual é o valor, sua resposta TEM que vir com os centavos. Não esconda o valor."
+            "\n\n[ATENÇÃO FINAL PARA O SEU TURNO]: "
+            "\n1. INTERPRETE: O cliente quer documento? Ofereça WhatsApp ou E-mail."
+            "\n2. INTERPRETE: Ele passou um e-mail? Use |||ACAO: ENVIAR_DOCUMENTOS_EMAIL: [email]|||."
+            "\n3. SEJA DIRETA: Se ele perguntou o valor, diga o valor com centavos. Sem rodeios."
+            "\n4. NUNCA faça o cliente esperar ('Só um minuto', 'Puxando aqui'). Você já tem os dados na mão. RESPOOOOONDA."
         )
             
         resposta, erro = self._chamar_gemini(prompt, system_instruction)

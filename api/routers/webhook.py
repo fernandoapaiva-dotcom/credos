@@ -5,6 +5,7 @@ from src.evolution_controller import EvolutionController
 from src.manager import Manager
 from src.cartorio_automation import CartorioAutomation
 from src.mail_scanner import MailScanner
+from src.mailer_service import MailerService
 from datetime import datetime
 import base64
 import asyncio
@@ -584,49 +585,50 @@ async def receber_webhook_evolution(request: Request):
                 _log_webhook("Ação detectada: SOLICITAR_LINK_CARTAO")
                 # Futura lógica de geração de link aqui
             
-            if "[AÇÃO: BUSCAR_NF_EMAIL]" in resp:
-                _log_webhook("🏁 Ação detectada: BUSCAR_NF_EMAIL")
+            # --- AÇÃO: BUSCAR_NF_EMAIL (Envio via WhatsApp) ---
+            if "[AÇÃO: BUSCAR_NF_EMAIL]" in resp or "ENVIAR_DOCUMENTOS_EMAIL" in resp:
+                is_email_only = "[AÇÃO: ENVIAR_DOCUMENTOS_EMAIL" in resp and "[AÇÃO: BUSCAR_NF_EMAIL]" not in resp
+                email_alvo = None
+                if "ENVIAR_DOCUMENTOS_EMAIL:" in resp:
+                    match_e = re.search(r'ENVIAR_DOCUMENTOS_EMAIL:\s*([^]]+)', resp)
+                    if match_e: email_alvo = match_e.group(1).strip()
+
+                _log_webhook(f"🏁 Orquestrando entrega de documentos. Email Alvo: {email_alvo}")
                 try:
                     scanner = MailScanner(config)
-                    # Busca todos os títulos em aberto para e-mail
-                    encontrados = 0
+                    pool_arquivos_global = set()
+                    
+                    # 1. Coleciona todos os documentos relevantes para todos os títulos em aberto
                     for it in info_debito.get('itens', []):
                         nf_num = it['numero_nf']
-                        _log_webhook(f"Buscando NF {nf_num} no e-mail base (Venc: {it['vencimento']})...")
+                        _log_webhook(f"Buscando Pooling para NF {nf_num}...")
                         arquivos = scanner.baixar_anexos_por_nf_validado(
-                            nf_num, 
-                            cliente_cnpj,
-                            cliente_nome,
+                            nf_num, cliente_cnpj, cliente_nome,
                             vencimento=it['vencimento'],
                             valor=[it['principal'], it['total']]
                         )
-                        if arquivos:
-                            for arq in arquivos:
-                                if arq.lower().endswith('.pdf'):
-                                    _log_webhook(f"PDF encontrado: {os.path.basename(arq)}. Enviando...")
-                                    r_midia = evo.enviar_midia(remote_jid, arq)
-                                    
-                                    if not r_midia and "55" in str(remote_jid):
-                                        partes = str(remote_jid).split("@")
-                                        num_base = partes[0]
-                                        jid_alt = None
-                                        if len(num_base) == 13:
-                                            jid_alt = f"{num_base[:4]}{num_base[5:]}@{partes[1]}"
-                                        elif len(num_base) == 12:
-                                            jid_alt = f"{num_base[:4]}9{num_base[4:]}@{partes[1]}"
-                                            
-                                        if jid_alt:
-                                            _log_webhook(f"Tentativa falhou. Testando variação do 9º dígito (Brasil) para arquivo: {jid_alt}")
-                                            evo.enviar_midia(jid_alt, arq)
-                                            
-                                    encontrados += 1
-                        else:
-                            _log_webhook(f"NF {nf_num} não encontrada.")
+                        if arquivos: pool_arquivos_global.update(arquivos)
                     
-                    if encontrados == 0:
-                        _log_webhook("Nenhuma NF encontrada. Notificando cliente humanamente (IA já agirá conforme script).")
+                    if pool_arquivos_global:
+                        # 2. Envio via WhatsApp (se solicitado)
+                        if not is_email_only:
+                            for arq in pool_arquivos_global:
+                                if arq.lower().endswith(('.pdf', '.xml', '.boleto')):
+                                    _log_webhook(f"Enviando {os.path.basename(arq)} via WhatsApp...")
+                                    evo.enviar_midia(remote_jid, arq)
+                        
+                        # 3. Envio via E-mail (se solicitado)
+                        if email_alvo:
+                            _log_webhook(f"Disparando e-mail SMTP para {email_alvo}...")
+                            mailer = MailerService(user=config.get('base_mail_user'), password=config.get('base_mail_pass'))
+                            corpo_email = f"Olá, {cliente_nome}.\n\nConforme conversamos via WhatsApp, seguem em anexo os documentos (Notas Fiscais/Boletos) referentes ao seu débito com a {config.get('empresa_nome')}.\n\nQualquer dúvida, estamos à disposição."
+                            mailer.enviar_email_com_anexos(email_alvo, "Documentos Fiscais - Credos", corpo_email, list(pool_arquivos_global))
+                            evo.enviar_mensagem_texto(remote_jid, f"✅ Prontinho! Acabei de enviar os documentos para o e-mail *{email_alvo}*. Dá uma olhadinha lá! 😉")
+
+                    elif not is_email_only:
+                        _log_webhook("Nenhum arquivo encontrado no Pooling.")
                 except Exception as e:
-                    _log_webhook(f"Erro fatal na busca de email: {e}", "ERROR")
+                    _log_webhook(f"Erro na orquestração de documentos: {e}", "ERROR")
             
             # LIMPAR todas as tags internas — cliente NUNCA deve ver [AÇÃO:...] ou [Bebot:...]
             resp_limpa = re.sub(r'\[AÇÃO:[^\]]*\]', '', resp).strip()
