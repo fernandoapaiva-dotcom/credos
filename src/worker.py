@@ -184,8 +184,9 @@ def disparar_negociacoes_ia(cnpj_filtro=None):
 
                 conn.close()
 
-                # Pula se o cliente já mandou comprovante ou está com acordo ativo
-                estados_pausa = ('comprovante_recebido', 'aguardando_comprovante', 'acordo_aprovado', 'verificando_pagamento', 'concluido')
+                # Pula se o cliente já mandou comprovante, está com acordo ativo ou fluxo pausado pelo operador
+                estados_pausa = ('comprovante_recebido', 'aguardando_comprovante', 'acordo_aprovado',
+                                 'verificando_pagamento', 'concluido', 'pausado_pelo_operador')
                 if sessao.get('estado') in estados_pausa:
                     print(f"   ⏭️ {cliente}: fluxo suspenso (estado: {sessao.get('estado')}).")
                     continue
