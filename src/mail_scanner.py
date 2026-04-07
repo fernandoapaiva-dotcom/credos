@@ -185,31 +185,37 @@ class MailScanner:
             
             print(f"🔍 [Pooling] Iniciando busca para NF {nf_str} (Alvos: {alvos_validos})...", flush=True)
 
-            # --- ETAPA 1: Busca por Número de NF (Primária) ---
+            # --- ETAPA 1: Busca por Número de NF (Corpo e Assunto) ---
             ids_candidatos = []
             for pasta in todas_pastas:
                 if any(x in pasta.lower() for x in ['spam', 'trash', 'lixeira', 'drafts']): continue
                 if not self._selecionar_pasta_segura(mail, pasta): continue
                 
-                typ, data = mail.search(None, f'(SUBJECT "{nf_str}")')
+                # Procura NF no assunto ou corpo (geralmente pega o nome do anexo)
+                typ, data = mail.search(None, f'(OR SUBJECT "{nf_str}" BODY "{nf_str}")')
                 if data[0]: ids_candidatos.extend([(pasta, mid) for mid in data[0].split()])
                 
                 if not data[0] and nf_str != nf_sem_zero:
-                    typ, data = mail.search(None, f'(SUBJECT "{nf_sem_zero}")')
+                    typ, data = mail.search(None, f'(OR SUBJECT "{nf_sem_zero}" BODY "{nf_sem_zero}")')
                     if data[0]: ids_candidatos.extend([(pasta, mid) for mid in data[0].split()])
 
-            # --- ETAPA 2: Busca por CNPJ (Secundária - Para achar NFs parceiras) ---
+            # --- ETAPA 2: Busca por CNPJ e Nome do Cliente (Ampla) ---
             cnpj_limpo = re.sub(r'\D', '', str(cnpj_cliente)) if cnpj_cliente else ""
-            if cnpj_limpo and len(cnpj_limpo) > 10:
-                for pasta in ['INBOX', '[Gmail]/Sent Mail', 'Sent']:
-                    if not self._selecionar_pasta_segura(mail, pasta): continue
-                    # Busca por CNPJ como palavra-chave
+            nome_curto = " ".join(str(nome_cliente).upper().split()[:2]) if nome_cliente else ""
+            
+            for pasta in ['INBOX', '[Gmail]/Sent Mail', 'Sent', 'Enviados']:
+                if not self._selecionar_pasta_segura(mail, pasta): continue
+                
+                if cnpj_limpo and len(cnpj_limpo) > 10:
                     typ, data = mail.search(None, f'(OR SUBJECT "{cnpj_limpo}" BODY "{cnpj_limpo}")')
                     if data[0]:
-                        m_ids = data[0].split()
-                        # Ultimos 10 e-mails do CNPJ costumam conter o que precisamos
-                        for mid in sorted(m_ids, reverse=True)[:10]:
-                            ids_candidatos.append((pasta, mid))
+                        for mid in sorted(data[0].split(), reverse=True)[:10]: ids_candidatos.append((pasta, mid))
+                
+                if nome_curto and len(nome_curto) > 4:
+                    # Se não foi, tenta pelo nome curto do cliente no corpo
+                    typ, data = mail.search(None, f'(BODY "{nome_curto}")')
+                    if data[0]:
+                        for mid in sorted(data[0].split(), reverse=True)[:10]: ids_candidatos.append((pasta, mid))
 
             # Consolida e-mails únicos para processar
             ids_unicos = []
