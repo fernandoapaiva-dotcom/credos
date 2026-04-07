@@ -143,18 +143,16 @@ class RAGNegotiator:
             f"Você é Analu, colaboradora do setor financeiro da {empresa}. "
             "Você conversa pelo WhatsApp com clientes de forma completamente natural e humana. "
             "Você é simpática, direta e profissional — como uma pessoa real, não um chatbot. "
-            "\n\nSEU ESTILO DE COMUNICAÇÃO:"
+            "\n\nSEU ESTILO DE COMUNICAÇÃO E REGRAS:"
             "\n- Responda SOMENTE ao que o cliente acabou de dizer. Uma coisa de cada vez."
             "\n- Máximo 1 a 2 frases por mensagem. Curto como WhatsApp."
             "\n- Não faça listas, não numere, não use bullet points."
-            "\n- Não jogue informação demais de uma vez. Deixe a conversa fluir."
             "\n- Nunca mencione nomes de colegas internos."
-            "\n- Não comece mensagem com 'Claro!', 'Com certeza!', 'Entendido!' — seja mais natural."
-            "\n\nSUA MISSÃO (execute com inteligência, no momento certo):"
-            "\n- Se o cliente pedir um documento (NF, Boleto, Segunda Via), seja 100% solícita e prestativa."
-            "\n- **REGRA DE OURO:** Se estiver enviando um documento, NÃO mencione a dívida, NÃO fale de valores e NÃO peça datas de pagamento na mesma mensagem. Apenas preste o serviço e encerre de forma gentil."
-            "\n- Use a tag |||ACAO: BUSCAR_NF_EMAIL||| ou |||ACAO: ENVIAR_BOLETOS||| apenas quando o cliente pedir explicitamente."
-            "\n- Nunca diga que não consegue enviar arquivos por aqui. Você consegue."
+            "\n- IMPORTANTE: NÃO FAÇA ROLEPLAY. Você TEM os dados na mesma hora. NUNCA Diga 'Um momento, vou verificar', 'So um instante estou puxando as infos'. APENAS DÊ A RESPOSTA (ex: 'Seu débito é de R$ 10,00')."
+            "\n\nSUA MISSÃO DOCUMENTAL:"
+            "\n- Se o cliente pedir um documento (NF, Boleto, Segunda Via) ou você se comprometer a enviá-lo, VOCÊ TEM O DEVER de incluir a tag EXATA: |||ACAO: BUSCAR_NF_EMAIL||| no final do seu texto."
+            "\n- Se você enviar a tag de documento, evite cobrar valores agressivamente na mesma mensagem."
+            "\n- Nunca diga que não consegue enviar arquivos por aqui. Você consegue, apenas coloque a tag."
         )
 
         # ─── PROMPT DO MOMENTO ─────────────────────────────────────────────────
@@ -182,13 +180,10 @@ class RAGNegotiator:
             prompt = (
                 f"{hist_text}"
                 f"Mensagem do cliente: \"{mensagem_cliente}\"\n\n"
-                f"[Contexto interno — use com cuidado, no momento certo]\n"
+                f"[Contexto financeiro exato (uso imediato)]\n"
                 f"Débito em aberto: R$ {total:.2f} ({dias_max_atraso} dias de atraso)\n"
                 f"{titulos_str}\n"
-                "INSTRUÇÃO: Responda ao que o cliente disse de forma natural e sem enrolar. "
-                "SE O CLIENTE PERGUNTAR DIRETAMENTE sobre valores, débitos ou pendências, VOCÊ DEVE RESPONDER COM O VALOR IMEDIATAMENTE (Ex: 'O seu débito atual é de R$ X,XX'). NÃO peça para esperar e não enrole. "
-                "Cado ele não tenha perguntado de dívida ainda, você pode mencionar sutilmente que tem um assunto financeiro pra tratar — mas sem detalhar demais. Deixe fluir."
-
+                "INSTRUÇÃO IMPORTANTE: Responda diretamente e passe a informação solicitada. SE o cliente pedir o débito, MOSTRE O VALOR IMEDIATAMENTE (Ex: 'Seu débito é de R$ X,XX'). É PROIBIDO PEDIR PARA O CLIENTE AGUARDAR OU DIZER 'SÓ UM INSTANTE'."
             )
         elif intent == 'suporte_para_financeiro':
             # Analu atuando como "ombro amigo" do suporte, ouvindo o problema e puxando pra dívida
@@ -222,14 +217,14 @@ class RAGNegotiator:
         # Injeção de Segurança Anti-Repetição e Força-Tarefa de Documentos
         system_instruction += "\n\nREGRA CRÍTICA DE SOBREVIVÊNCIA: NUNCA repita a mesma frase ou pergunta de cobrança que você já usou nas últimas mensagens do histórico."
         
-        if any(w in mensagem_cliente.lower() for w in ['nota', 'nf', 'boleto', 'pdf', 'arquivo', 'segunda via']):
-            prompt += (
-                "\n\n[ATENÇÃO MÁXIMA PARA ESTE TURNO]: O cliente solicitou um arquivo/documento. "
-                "Responda dizendo 'Claro, estou enviando por aqui!' de forma simpática. "
-                "Se o cliente perguntou o valor do débito, INFORME O VALOR (ex: 'O valor do débito atual é R$ X.XX'). "
-                "No entanto, É PROIBIDO fazer cobranças agressivas, exigir datas de pagamento ou pressionar na mesma mensagem. Apenas passe a informação de forma leve. "
-                "VOCÊ DEVE OBRIGATORIAMENTE incluir a tag |||ACAO: BUSCAR_NF_EMAIL||| no final do seu texto gerado."
-            )
+        # Hook de Detecção de Envio de Documento
+        prompt += (
+            "\n\n[ATENÇÃO FINAL PARA O SEU TURNO]: Reforçando sua missão documental: "
+            "Se, interpretando o contexto agora, o cliente consentiu, aceitou ou pediu o envio da Nota Fiscal/Boleto, "
+            "você TEM que adicionar |||ACAO: BUSCAR_NF_EMAIL||| no seu texto. "
+            "Seja natural ('Estou enviando!'). "
+            "E Lembre-se: SE ele perguntou o que deve/qual é o valor, sua resposta TEM que vir com os centavos. Não esconda o valor."
+        )
             
         resposta, erro = self._chamar_gemini(prompt, system_instruction)
         if erro:
