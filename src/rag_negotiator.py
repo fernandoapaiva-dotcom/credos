@@ -256,7 +256,7 @@ class RAGNegotiator:
         msg = mensagem_cliente.lower().strip()
         
         # 1. Financeiro Puro
-        fin_words = ['boleto', 'pix', 'nota', 'nf', 'fatura', 'pagar', 'pagamento', 'devo', 'divida', 'valor', 'atraso', 'desconto', 'parcelar', 'juros']
+        fin_words = ['boleto', 'pix', 'nota', 'nf', 'fatura', 'pagar', 'pagamento', 'devo', 'devendo', 'divida', 'valor', 'atraso', 'desconto', 'parcelar', 'juros', 'pendente', 'pendencia', 'aberto', 'situacao']
         if any(w in msg for w in fin_words):
             return 'financeiro'
             
@@ -273,8 +273,8 @@ class RAGNegotiator:
         if len(msg) < 40 and any(w in msg for w in saudacoes):
             return 'saudacao'
             
-        # Fallback de segurança para não cobrar sem motivo
-        return 'saudacao'
+        # Fallback: Se não for saudação simples nem outras, deixa a IA tratar como financeiro e analisar.
+        return 'financeiro'
 
     def classificar_intencao(self, mensagem_cliente):
         prompt = (
