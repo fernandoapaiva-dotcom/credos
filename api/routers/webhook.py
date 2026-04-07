@@ -615,7 +615,16 @@ async def receber_webhook_evolution(request: Request):
                             for arq in pool_arquivos_global:
                                 if arq.lower().endswith(('.pdf', '.xml', '.boleto')):
                                     _log_webhook(f"Enviando {os.path.basename(arq)} via WhatsApp...")
-                                    evo.enviar_midia(remote_jid, arq)
+                                    r_midia = evo.enviar_midia(remote_jid, arq)
+                                    if not r_midia and "55" in str(remote_jid):
+                                        partes = str(remote_jid).split("@")
+                                        num_base = partes[0]
+                                        if len(num_base) == 13:
+                                            num_sem_9 = num_base[:4] + num_base[5:]
+                                            evo.enviar_midia(f"{num_sem_9}@{partes[1]}", arq)
+                                        elif len(num_base) == 12:
+                                            num_com_9 = num_base[:4] + "9" + num_base[4:]
+                                            evo.enviar_midia(f"{num_com_9}@{partes[1]}", arq)
                         
                         # 3. Envio via E-mail (se solicitado)
                         if email_alvo:
