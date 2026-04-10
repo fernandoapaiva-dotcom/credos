@@ -187,6 +187,14 @@ def ai_test(cnpj: str):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Erro de Conexão IA: {str(e)}")
 
+from fastapi import BackgroundTasks
+
+@router.post("/{cnpj}/ai/trigger")
+def ai_trigger(cnpj: str, background_tasks: BackgroundTasks):
+    from src.worker import disparar_negociacoes_ia
+    background_tasks.add_task(disparar_negociacoes_ia, cnpj)
+    return {"success": True, "message": "Disparo IA iniciado em segundo plano com sucesso."}
+
 @router.post("/{cnpj}/cartorio/test-cert")
 def test_cartorio_cert(cnpj: str):
     conf = carregar_configuracoes_db(cnpj)

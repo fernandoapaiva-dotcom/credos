@@ -7,6 +7,17 @@ import asyncio
 from datetime import datetime
 import time
 
+import builtins
+import holidays
+_original_print = builtins.print
+def safe_print(*args, **kwargs):
+    try:
+        _original_print(*args, **kwargs)
+    except Exception:
+        safe_args = [str(a).encode('utf-8', 'replace').decode('ascii', 'replace') for a in args]
+        _original_print(*safe_args, **kwargs)
+builtins.print = safe_print
+
 def disparar_cobranca_automatica(forcar_execucao=False, cnpj_filtro=None):
     """
     Motor de Cobrança:
@@ -66,6 +77,11 @@ def disparar_cobranca_automatica(forcar_execucao=False, cnpj_filtro=None):
             
             if hoje_semana not in dias_permitidos:
                 print(f"⏩ Pulando {cnpj_empresa}: Hoje não está na agenda.")
+                continue
+                
+            pular_feriados = ag.get('pular_feriados', 1)
+            if pular_feriados == 1 and datetime.now().date() in holidays.BR():
+                print(f"⏩ Pulando {cnpj_empresa}: Hoje é feriado nacional e a configuração manda pular.")
                 continue
                 
             horario_esperado = ag.get('horario_envio', '09:00')
@@ -152,6 +168,11 @@ def disparar_negociacoes_ia(cnpj_filtro=None):
         except: dias_permitidos = []
 
         if hoje_semana not in dias_permitidos:
+            continue
+            
+        pular_feriados = ag.get('pular_feriados', 1)
+        if pular_feriados == 1 and datetime.now().date() in holidays.BR():
+            print(f"⏩ Pulando IA {cnpj}: Hoje é feriado nacional.")
             continue
             
         horario_esperado = ag.get('horario_envio', '09:00')

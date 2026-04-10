@@ -154,21 +154,15 @@ def rotina_backup_diario():
             logging.error(f"Falha no backup programado: {result}")
 
 def rotina_analu_ia():
-    agora = datetime.datetime.now()
-    dia_semana_hoje = agora.weekday() # 0 a 6 (Segunda=0)
-    
-    # Executa apenas de Segunda a Sexta
-    if dia_semana_hoje <= 4:
-        print(f"🤖 [Analu] Iniciando ciclo de negociação autônoma...")
-        logging.info("🤖 Iniciando ciclo de negociação autônoma (Analu)")
-        try:
-            # 1. Verifica promessas vencidas primeiro
-            verificar_promessas_d1()
-            # 2. Dispara ciclo de 20 dias
-            disparar_negociacoes_ia()
-            logging.info("🤖 Ciclo Analu finalizado com sucesso.")
-        except Exception as e:
-            logging.error(f"❌ Erro na rotina Analu IA: {e}")
+    logging.info("🤖 Verificando ciclo de negociação autônoma (Analu)")
+    try:
+        # A lógica de horários e dias permitidos agora reside internamente no worker.py
+        # 1. Verifica promessas vencidas primeiro
+        verificar_promessas_d1()
+        # 2. Dispara ciclo de 20 dias
+        disparar_negociacoes_ia()
+    except Exception as e:
+        logging.error(f"❌ Erro na rotina Analu IA: {e}")
 
 # Agendamento: 
 # Roda a rotina de cobrança a cada 1 minuto
@@ -179,8 +173,8 @@ schedule.every().minute.do(rotina_backup_diario)
 schedule.every(5).minutes.do(processar_fila_cartorio)
 # Verifica retorno do cartório todo dia às 10:00
 schedule.every().day.at("10:00").do(verificar_retorno_cartorio)
-# Rotina Analu (IA) de Segunda a Sexta às 09:00
-schedule.every().day.at("09:00").do(rotina_analu_ia)
+# Rotina Analu (IA) roda a cada minuto (a trava de horário está dentro da função de disparo)
+schedule.every().minute.do(rotina_analu_ia)
 
 if __name__ == "__main__":
     print("🤖 Robô Credos Ativado.")

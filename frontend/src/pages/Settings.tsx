@@ -60,7 +60,15 @@ export const Settings: React.FC = () => {
   const loadScheduler = async (cnpj: string) => {
     try {
       const res = await api.get(`/companies/${cnpj}/scheduler`);
-      setScheduler(res.data.scheduler || { dias: [], hora: '09:00', ignorar_feriados: true, ativo: false });
+      const s = res.data.scheduler;
+      if (s) {
+         setScheduler({
+            dias: s.dias_ui || s.dias || [],
+            hora: s.hora_envio || s.hora || '09:00',
+            ignorar_feriados: s.ignorar_feriados ?? true,
+            ativo: s.ativo ?? false
+         });
+      }
     } catch (e) { }
   };
 
@@ -169,6 +177,37 @@ export const Settings: React.FC = () => {
       alert(e.response?.data?.detail || 'Erro ao testar Inteligência Artificial');
     }
     setTestingIA(false);
+  };
+
+  const checkIsLate = () => {
+    if (!scheduler.ativo) return false;
+    const now = new Date();
+    const currentDay = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'][now.getDay()];
+    
+    // Suporte tanto para o formato novo (dias) quanto legado/db (dias_ui)
+    const diasAtivos = scheduler.dias || scheduler.dias_ui || [];
+    const isToday = Array.isArray(diasAtivos) && diasAtivos.includes(currentDay);
+    
+    const h = String(now.getHours()).padStart(2, '0');
+    const m = String(now.getMinutes()).padStart(2, '0');
+    const nowTimeString = `${h}:${m}`;
+    
+    const horaConfig = scheduler.hora || scheduler.hora_envio || "09:00";
+    const isPastTime = nowTimeString > horaConfig;
+    
+    return isToday && isPastTime;
+  };
+
+  const isLate = checkIsLate();
+
+  const handleTriggerLate = async () => {
+     if (!confirm("Isso iniciará as cobranças de IA para todos os clientes pendentes agendados para hoje. Continuar?")) return;
+     try {
+       await api.post(`/companies/${companyCnpj}/ai/trigger`);
+       alert("Disparo IA iniciado com sucesso em segundo plano! Clientes já cobrados hoje serão ignorados automaticamente.");
+     } catch (e: any) {
+       alert(e.response?.data?.detail || "Erro ao disparar IA manualmente.");
+     }
   };
 
   // --- WhatsApp Evolution ---
@@ -552,13 +591,24 @@ export const Settings: React.FC = () => {
                 </div>
              </div>
 
-             <div className="bg-slate-50 dark:bg-dark-surface p-6 rounded-xl border border-slate-200 dark:border-dark-border">
+             <div className="bg-slate-50 dark:bg-dark-surface p-6 rounded-xl border border-slate-200 dark:border-dark-border mb-6">
                 <div className="flex items-center justify-between mb-6">
                   <h4 className="font-bold text-slate-800 dark:text-white">Robô de Automação Diária</h4>
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input type="checkbox" className="sr-only peer" checked={scheduler.ativo} onChange={e => setScheduler({...scheduler, ativo: e.target.checked})} />
-                    <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-slate-600 peer-checked:bg-primary-600"></div>
-                  </label>
+                  <div className="flex items-center gap-4">
+                     {scheduler.ativo && (
+                        <button 
+                          onClick={handleTriggerLate}
+                          title="Força o início do robô agora mesmo para os títulos de hoje"
+                          className="text-xs flex items-center gap-1 bg-amber-100 hover:bg-amber-200 text-amber-800 px-3 py-1.5 rounded-lg border border-amber-300 transition-all dark:bg-amber-900/40 dark:text-amber-300 dark:border-amber-700 font-bold"
+                        >
+                           🚀 Forçar Envio Hoje {isLate ? '(Atrasado)' : ''}
+                        </button>
+                     )}
+                     <label className="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" className="sr-only peer" checked={scheduler.ativo} onChange={e => setScheduler({...scheduler, ativo: e.target.checked})} />
+                        <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-slate-600 peer-checked:bg-primary-600"></div>
+                     </label>
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -601,6 +651,8 @@ export const Settings: React.FC = () => {
                     </div>
                   </div>
                 </div>
+             </div>
+
              </div>
 
              <div className="flex justify-end pt-4 gap-3">

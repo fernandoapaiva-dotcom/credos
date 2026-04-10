@@ -1147,6 +1147,28 @@ elif selected == "Configurações":
                 st.success("Configuração salva com sucesso!"); st.rerun()
         
         st.divider()
+        
+        # --- VERIFICAÇÃO DE HORÁRIO ATRASADO ---
+        if ag and ag.get('ativo'):
+            from datetime import datetime as dt
+            hoje_num = dt.now().weekday()
+            map_inverso = {0:"Segunda", 1:"Terça", 2:"Quarta", 3:"Quinta", 4:"Sexta", 5:"Sábado", 6:"Domingo"}
+            hoje_nome = map_inverso.get(hoje_num)
+            dias_ag_list = ag.get('dias_ui', [])
+            hora_ag_str = ag.get('hora_envio', "09:00")
+            agora_str = dt.now().strftime("%H:%M")
+            if hoje_nome in dias_ag_list and agora_str > hora_ag_str:
+                st.info(f"⏳ **Notificação:** O horário configurado para hoje ({hora_ag_str}) já passou.")
+                if st.button("🚀 Forçar Envio Hoje (Atrasado)", type="primary"):
+                    from src.worker import disparar_negociacoes_ia
+                    with st.spinner("Disparando rotinas IA atrasadas... (Pode demorar)"):
+                        disparar_negociacoes_ia(conf.get('empresa_cnpj'))
+                    st.success("Disparo concluído! Clientes já cobrados hoje foram pulados.")
+                    import time
+                    time.sleep(2)
+                    st.rerun()
+        # ---------------------------------------
+        
         col_test, col_res = st.columns([1, 3])
         if col_test.button("🧠 Testar Cérebro"):
             k_test = st.session_state.config.get('gemini_api_key')
