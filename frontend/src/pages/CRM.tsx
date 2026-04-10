@@ -902,40 +902,43 @@ export const CRM: React.FC = () => {
               )}
             </div>
 
-            <div className="p-6 border-t border-slate-100 dark:border-dark-border bg-slate-50/30 dark:bg-dark-surface flex flex-col md:flex-row gap-4 items-center justify-between">
+            <div className="p-6 border-t border-slate-100 dark:border-dark-border bg-slate-50/30 dark:bg-dark-surface flex flex-col gap-5">
               
-              <div className="flex bg-slate-200/50 dark:bg-dark-bg p-1 rounded-xl shadow-inner border border-slate-200 dark:border-dark-border w-full justify-center md:w-auto">
-                <button 
-                  onClick={() => setSelectedChannels('email')} 
-                  className={`px-4 py-2 text-xs font-bold rounded-lg transition-colors flex-1 md:flex-none ${selectedChannels === 'email' ? 'bg-white dark:bg-slate-700 shadow-sm text-primary-600' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400'}`}
-                >
-                  ✉️ Só E-mail
-                </button>
-                <button 
-                  onClick={() => setSelectedChannels('whatsapp')} 
-                  className={`px-4 py-2 text-xs font-bold rounded-lg transition-colors flex-1 md:flex-none ${selectedChannels === 'whatsapp' ? 'bg-white dark:bg-slate-700 shadow-sm text-green-600' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400'}`}
-                >
-                  💬 Só WhatsApp
-                </button>
-                <button 
-                  onClick={() => setSelectedChannels('ambos')} 
-                  className={`px-4 py-2 text-xs font-bold rounded-lg transition-colors flex-[1.5] md:flex-none ${selectedChannels === 'ambos' ? 'bg-white dark:bg-slate-700 shadow-sm text-indigo-600' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400'}`}
-                >
-                  🚀 WhatsApp + E-mail
-                </button>
+              <div className="flex flex-col">
+                <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2 ml-1">Canais de Comunicação</span>
+                <div className="flex bg-slate-200/50 dark:bg-dark-bg p-1.5 rounded-2xl shadow-inner border border-slate-200 dark:border-dark-border w-full">
+                  <button 
+                    onClick={() => setSelectedChannels('email')} 
+                    className={`px-3 py-2.5 text-xs font-bold rounded-xl transition-all flex-1 ${selectedChannels === 'email' ? 'bg-white dark:bg-slate-700 shadow-sm text-primary-600' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
+                  >
+                    ✉️ Só E-mail
+                  </button>
+                  <button 
+                    onClick={() => setSelectedChannels('whatsapp')} 
+                    className={`px-3 py-2.5 text-xs font-bold rounded-xl transition-all flex-1 ${selectedChannels === 'whatsapp' ? 'bg-white dark:bg-slate-700 shadow-sm text-green-600' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
+                  >
+                    💬 Só WhatsApp
+                  </button>
+                  <button 
+                    onClick={() => setSelectedChannels('ambos')} 
+                    className={`px-3 py-2.5 text-xs font-bold rounded-xl transition-all flex-[1.2] ${selectedChannels === 'ambos' ? 'bg-white dark:bg-slate-700 shadow-sm text-indigo-600' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
+                  >
+                    🚀 Ambos os Canais
+                  </button>
+                </div>
               </div>
 
-              <div className="flex gap-4 w-full md:w-auto mt-2 md:mt-0">
+              <div className="flex gap-4 w-full">
                   <button 
                     onClick={() => setIsShowingPreview(false)} 
-                    className="flex-1 md:flex-none py-3 px-6 text-sm font-bold text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 transition-colors"
+                    className="flex-[0.8] py-3.5 px-4 text-sm font-bold text-slate-600 bg-white dark:bg-dark-bg hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-all border border-slate-200 dark:border-dark-border"
                   >
                     Cancelar
                   </button>
                   <button 
                     onClick={confirmChargeAll}
                     disabled={previewData.length === 0 || actionLoading}
-                    className="flex-[2] md:flex-none bg-primary-600 hover:bg-primary-700 text-white py-3 px-8 rounded-xl font-black shadow-lg shadow-primary-500/20 flex justify-center items-center gap-2 disabled:opacity-50 transition-all hover:scale-[1.02]"
+                    className="flex-[2] bg-primary-600 hover:bg-primary-700 text-white py-3.5 px-6 rounded-xl font-black shadow-lg shadow-primary-500/20 flex justify-center items-center gap-2 disabled:opacity-50 transition-all hover:scale-[1.02]"
                   >
                     <Send size={18} />
                     Confirmar Disparos

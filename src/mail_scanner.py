@@ -124,11 +124,16 @@ class MailScanner:
 
         nome_curto = " ".join(nome_alvo.upper().split()[:2]) if nome_alvo else ""
 
-        # 1. Identidade
+        # 1. Identidade Forte (CNPJ)
         if cnpj_limpo and len(cnpj_limpo) > 5 and (cnpj_limpo in texto_limpo or cnpj_limpo in fname_limpo):
             meta['pertence_cliente'] = True
-        elif nome_curto and len(nome_curto) > 3 and (nome_curto in texto_upper or nome_curto in fname_limpo.upper()):
-            meta['pertence_cliente'] = True
+        else:
+            # Identidade Flexível (Nome)
+            primeiro_nome = nome_alvo.upper().split()[0] if nome_alvo else ""
+            if nome_curto and len(nome_curto) > 3 and (nome_curto in texto_upper or nome_curto in fname_limpo.upper()):
+                meta['pertence_cliente'] = True
+            elif primeiro_nome and len(primeiro_nome) >= 3 and (primeiro_nome in texto_upper or primeiro_nome in fname_limpo.upper()):
+                meta['pertence_cliente'] = True
 
         # 2. Número da NF (Sniper de Precisão)
         if nf_alvo:
@@ -336,10 +341,22 @@ class MailScanner:
                 if not eh_nf_confirmada and m.get('score', 0) >= 30: # Score Alto = NF Interna
                     eh_nf_confirmada = True
 
+                # CROSS-CONTAMINATION FILTER: Ensures we don't grab a different client's file just because the NFe matches!
+                if eh_nf_confirmada:
+                    identidade_batendo = False
+                    if m.get('pertence_cliente', False): identidade_batendo = True
+                    if m.get('tem_vencimento', False): identidade_batendo = True
+                    if alvos_validos and m.get('valores') and any((abs(v - a) < 1.0) for v in m.get('valores') for a in alvos_validos):
+                        identidade_batendo = True
+                        
+                    if not identidade_batendo and not m.get('eh_imagem', False):
+                        eh_nf_confirmada = False
+                        print(f"   ⚠️ REJEITADO POR SEGURANÇA: Número {nf_num} bate, mas nome/CNPJ/valor NÃO batem! (Contaminação de cliente evitada): {bname[:50]}")
+
                 if eh_nf_confirmada:
                     arquivos_aprovados.add(m['fpath'])
                     emails_com_nf_confirmada.add(m['email_id'])
-                    print(f"   ✅ NF CONFIRMADA: {bname[:60]} (Email: {m['email_id']})")
+                    print(f"   ✅ NF CONFIRMADA E VALIDADA: {bname[:60]} (Email: {m['email_id']})")
 
             # Passada 2: Aprova outros arquivos (Boletos/XMLs) que estão nos mesmos e-mails aprovados
             for m in pool_metadados:
