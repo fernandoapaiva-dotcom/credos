@@ -180,7 +180,6 @@ export const Settings: React.FC = () => {
   };
 
   const checkIsLate = () => {
-    if (!scheduler.ativo) return false;
     const now = new Date();
     const currentDay = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'][now.getDay()];
     
@@ -595,15 +594,13 @@ export const Settings: React.FC = () => {
                 <div className="flex items-center justify-between mb-6">
                   <h4 className="font-bold text-slate-800 dark:text-white">Robô de Automação Diária</h4>
                   <div className="flex items-center gap-4">
-                     {scheduler.ativo && (
-                        <button 
-                          onClick={handleTriggerLate}
-                          title="Força o início do robô agora mesmo para os títulos de hoje"
-                          className="text-xs flex items-center gap-1 bg-amber-100 hover:bg-amber-200 text-amber-800 px-3 py-1.5 rounded-lg border border-amber-300 transition-all dark:bg-amber-900/40 dark:text-amber-300 dark:border-amber-700 font-bold"
-                        >
-                           🚀 Forçar Envio Hoje {isLate ? '(Atrasado)' : ''}
-                        </button>
-                     )}
+                     <button 
+                       onClick={handleTriggerLate}
+                       title="Força o início do robô agora mesmo para os títulos de hoje"
+                       className="text-xs flex items-center gap-1 bg-amber-100 hover:bg-amber-200 text-amber-800 px-3 py-1.5 rounded-lg border border-amber-300 transition-all dark:bg-amber-900/40 dark:text-amber-300 dark:border-amber-700 font-bold"
+                     >
+                        🚀 Forçar Envio Hoje {isLate ? '(Atrasado)' : ''}
+                     </button>
                      <label className="relative inline-flex items-center cursor-pointer">
                         <input type="checkbox" className="sr-only peer" checked={scheduler.ativo} onChange={e => setScheduler({...scheduler, ativo: e.target.checked})} />
                         <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-slate-600 peer-checked:bg-primary-600"></div>
