@@ -55,9 +55,9 @@ class EvolutionController:
         log_file = os.path.join(log_dir, "EVO_DEBUG.txt")
         
         try:
-            # Auto-correção: se estiver rodando no Docker e usar localhost, muda para 'evolution'
+            # Auto-correção: se estiver rodando no Docker e usar localhost, muda para 'evolution_api'
             if 'localhost' in self.url and os.path.exists('/.dockerenv'):
-                self.url = self.url.replace('localhost', 'evolution')
+                self.url = self.url.replace('localhost', 'evolution_api')
                 with open(log_file, "a") as f: f.write(f"[{self.instance}] Auto-corrigindo URL para: {self.url}\n")
 
             if not self.url or not self.apikey: 
@@ -157,7 +157,7 @@ class EvolutionController:
             
             # Auto-correção URL
             if 'localhost' in self.url and os.path.exists('/.dockerenv'):
-                self.url = self.url.replace('localhost', 'evolution')
+                self.url = self.url.replace('localhost', 'evolution_api')
 
             # Se o número já vier com @ (ex: @lid ou @s.whatsapp.net), use como JID direto
             if "@" in str(numero):

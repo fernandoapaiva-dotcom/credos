@@ -192,7 +192,7 @@ from fastapi import BackgroundTasks
 @router.post("/{cnpj}/ai/trigger")
 def ai_trigger(cnpj: str, background_tasks: BackgroundTasks):
     from src.worker import disparar_negociacoes_ia
-    background_tasks.add_task(disparar_negociacoes_ia, cnpj)
+    background_tasks.add_task(disparar_negociacoes_ia, cnpj, True)
     return {"success": True, "message": "Disparo IA iniciado em segundo plano com sucesso."}
 
 @router.post("/{cnpj}/cartorio/test-cert")

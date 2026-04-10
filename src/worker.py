@@ -134,7 +134,7 @@ def disparar_cobranca_automatica(forcar_execucao=False, cnpj_filtro=None):
     print(f"🏁 Ciclo Finalizado. Total de envios: {total_envios}")
     return total_envios
 
-def disparar_negociacoes_ia(cnpj_filtro=None):
+def disparar_negociacoes_ia(cnpj_filtro=None, forcar_hoje=False):
     """
     Motor de Negociação RAG — Ciclo Diário de 20 Dias:
     - Dia 1 a 20: envia mensagem diária com tom crescente
@@ -167,17 +167,19 @@ def disparar_negociacoes_ia(cnpj_filtro=None):
                 dias_permitidos = [int(d) for d in raw_dias.split(",") if d.strip()]
         except: dias_permitidos = []
 
-        if hoje_semana not in dias_permitidos:
-            continue
-            
-        pular_feriados = ag.get('pular_feriados', 1)
-        if pular_feriados == 1 and datetime.now().date() in holidays.BR():
-            print(f"⏩ Pulando IA {cnpj}: Hoje é feriado nacional.")
-            continue
-            
-        horario_esperado = ag.get('horario_envio', '09:00')
-        if hora_atual != horario_esperado:
-            continue
+        if not forcar_hoje:
+            if hoje_semana not in dias_permitidos:
+                continue
+                
+            pular_feriados = ag.get('pular_feriados', 1)
+            if pular_feriados == 1 and datetime.now().date() in holidays.BR():
+                print(f"⏩ Pulando IA {cnpj}: Hoje é feriado nacional.")
+                continue
+                
+            horario_esperado = ag.get('horario_envio', '09:00')
+            if hora_atual != horario_esperado:
+                continue
+
 
         try:
             mgr = Manager(cnpj)
