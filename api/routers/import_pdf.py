@@ -109,7 +109,7 @@ def save_layout(layout: LayoutData, x_company_cnpj: str = Header(...)):
         'valor': layout.col_valor,
         'pagador': layout.col_pagador
     }
-    mgr.salvar_layout_preferido(layout.nome_layout, mapa)
+    mgr.salvar_layout_banco(layout.nome_layout, mapa)
     return {"success": True, "message": "Layout salvo com sucesso."}
 
 @router.delete("/layouts/{id}")

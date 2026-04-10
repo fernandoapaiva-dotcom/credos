@@ -19,6 +19,14 @@ interface TitlePreview {
   valor: number;
 }
 
+interface NewClientData {
+    nome: string;
+    cnpj: string;
+    whatsapp: string;
+    email: string;
+    contato: string;
+}
+
 interface DBTitle {
   id: number;
   pagador: string;
@@ -31,10 +39,10 @@ interface DBTitle {
 export const ImportPDF: React.FC = () => {
   const [file, setFile] = useState<File | null>(null);
   const [layouts, setLayouts] = useState<LayoutData[]>([]);
-  const [selectedLayoutId, setSelectedLayoutId] = useState<string>('');
+  const [selectedLayoutId, setSelectedLayoutId] = useState<string>('new');
   
   const [preview, setPreview] = useState<TitlePreview[]>([]);
-  const [novosClientes, setNovosClientes] = useState<string[]>([]);
+  const [novosClientes, setNovosClientes] = useState<NewClientData[]>([]);
   const [missingTitles, setMissingTitles] = useState<DBTitle[]>([]);
   
   // States for New Layout Mapping
@@ -119,12 +127,16 @@ export const ImportPDF: React.FC = () => {
   };
 
   const handleUpload = async () => {
+    if (!file) return alert("Por favor, selecione um arquivo PDF primeiro.");
+
     if (selectedLayoutId === 'new') {
       handlePreviewMap();
     } else {
       const layoutCfg = layouts.find(l => String(l.id) === selectedLayoutId);
       if (layoutCfg) {
         await processUploadWithLayout(layoutCfg);
+      } else {
+        alert("Layout não encontrado. Tente selecionar novamente ou clique em 'Mapear Novo'.");
       }
     }
   };
@@ -150,7 +162,13 @@ export const ImportPDF: React.FC = () => {
       );
 
       setPreview(readTitles);
-      setNovosClientes(resUpload.data.novos_clientes_necessarios);
+      setNovosClientes((resUpload.data.novos_clientes_necessarios || []).map((nome: string) => ({
+        nome,
+        cnpj: '',
+        whatsapp: '',
+        email: '',
+        contato: ''
+      })));
       setMissingTitles(missing.map(m => ({...m, action: 'Cartório'}))); 
       setIsMapping(false);
       setStep(2);
@@ -164,7 +182,13 @@ export const ImportPDF: React.FC = () => {
     setLoading(true);
     try {
       for (const nc of novosClientes) {
-        await api.post('/crm/clients', { nome: nc, cnpj: '00000000000000', whatsapp: '', email: '', contato: '' });
+        await api.post('/crm/clients', { 
+            nome: nc.nome, 
+            cnpj: nc.cnpj || '00.000.000/0000-00', 
+            whatsapp: nc.whatsapp, 
+            email: nc.email, 
+            contato: nc.contato || '' 
+        });
       }
 
       await api.post('/import/confirm', { titulos: preview });
@@ -316,12 +340,98 @@ export const ImportPDF: React.FC = () => {
             </div>
 
             {novosClientes.length > 0 && (
-               <div className="p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
-                 <h4 className="font-bold text-blue-800 dark:text-blue-300 mb-2">Novos Clientes Identificados</h4>
-                 <ul className="list-disc pl-5 text-sm text-blue-700 dark:text-blue-400">
-                   {novosClientes.map(c => <li key={c}>{c}</li>)}
-                 </ul>
-                 <p className="text-xs mt-2 text-blue-600 dark:text-blue-500">O sistema criará o cadastro base deles (Nome). Preencha CNPJ e Contatos no Menu CRM posteriormente.</p>
+               <div className="p-8 bg-blue-50 dark:bg-blue-900/20 border-2 border-primary-500/50 rounded-2xl shadow-xl animate-pulse-subtle">
+                 <div className="flex items-center gap-3 mb-6">
+                    <div className="bg-primary-500 p-2 rounded-lg text-white">
+                      <UploadCloud size={24} />
+                    </div>
+                    <div>
+                      <h4 className="font-black text-xl text-primary-900 dark:text-primary-100 uppercase tracking-tight">
+                        ⚡ Cadastro Expresso de Novos Clientes
+                      </h4>
+                      <p className="text-sm text-primary-700/80 dark:text-primary-300/80">
+                        Detectamos {novosClientes.length} clientes que ainda não estão na sua base. Preencha os dados abaixo para ativá-los agora:
+                      </p>
+                    </div>
+                 </div>
+                 
+                 <div className="grid grid-cols-1 gap-6">
+                   {novosClientes.map((nc, idx) => (
+                     <div key={idx} className="bg-white dark:bg-dark-surface p-6 rounded-2xl border border-primary-100 dark:border-primary-900/50 shadow-sm hover:border-primary-500 transition-all group">
+                       <div className="flex flex-col lg:flex-row gap-6">
+                         <div className="flex-1">
+                            <label className="block text-[10px] font-black text-primary-500 uppercase mb-2 tracking-widest">Razão Social / Identificação</label>
+                            <input 
+                              type="text" 
+                              className="input-field py-2.5 text-base font-bold bg-slate-50 dark:bg-dark-bg/50 border-transparent focus:border-primary-500"
+                              value={nc.nome}
+                              onChange={(e) => {
+                                const up = [...novosClientes];
+                                up[idx].nome = e.target.value;
+                                setNovosClientes(up);
+                              }}
+                            />
+                         </div>
+                         <div className="w-full lg:w-48">
+                           <label className="block text-[10px] font-black text-slate-400 uppercase mb-2 tracking-widest">Número do CNPJ</label>
+                           <input 
+                              type="text" 
+                              className="input-field py-2.5 text-sm focus:ring-2 ring-primary-500/20"
+                              placeholder="00.000.000/0000-00"
+                              value={nc.cnpj}
+                              onChange={(e) => {
+                                const up = [...novosClientes];
+                                up[idx].cnpj = e.target.value;
+                                setNovosClientes(up);
+                              }}
+                           />
+                         </div>
+                         <div className="w-full lg:w-48">
+                            <label className="block text-[10px] font-black text-slate-400 uppercase mb-2 tracking-widest">WhatsApp Envio</label>
+                            <input 
+                              type="text" 
+                              className="input-field py-2.5 text-sm focus:ring-2 ring-primary-500/20"
+                              placeholder="55 (00) 00000-0000"
+                              value={nc.whatsapp}
+                              onChange={(e) => {
+                                const up = [...novosClientes];
+                                up[idx].whatsapp = e.target.value;
+                                setNovosClientes(up);
+                              }}
+                            />
+                         </div>
+                         <div className="flex-1">
+                            <label className="block text-[10px] font-black text-slate-400 uppercase mb-2 tracking-widest">E-mail Financeiro</label>
+                            <input 
+                              type="email" 
+                              className="input-field py-2.5 text-sm focus:ring-2 ring-primary-500/20"
+                              placeholder="financeiro@empresa.com"
+                              value={nc.email}
+                              onChange={(e) => {
+                                const up = [...novosClientes];
+                                up[idx].email = e.target.value;
+                                setNovosClientes(up);
+                              }}
+                            />
+                         </div>
+                         <div className="w-full lg:w-48">
+                            <label className="block text-[10px] font-black text-slate-400 uppercase mb-2 tracking-widest">👤 Contato (Nome)</label>
+                            <input 
+                              type="text" 
+                              className="input-field py-2.5 text-sm focus:ring-2 ring-primary-500/20"
+                              placeholder="Ex: João, Dr. Silva..."
+                              value={nc.contato}
+                              onChange={(e) => {
+                                const up = [...novosClientes];
+                                up[idx].contato = e.target.value;
+                                setNovosClientes(up);
+                              }}
+                            />
+                         </div>
+                       </div>
+                     </div>
+                   ))}
+                 </div>
                </div>
             )}
 

@@ -22,6 +22,67 @@ class Manager:
         self.config = carregar_configuracoes_db(cnpj_empresa)
         self.evo = EvolutionController(self.config, cnpj_empresa)
 
+    def _humanizar_detalhes(self, det_raw):
+        """Converte JSON técnico de logs em texto amigável."""
+        if not det_raw: return ""
+        if not isinstance(det_raw, str): return str(det_raw)
+        
+        det_raw = det_raw.strip()
+        if not det_raw.startswith('{'):
+            return det_raw # Já é texto puro (ex: "Status alterado...")
+            
+        try:
+            js = json.loads(det_raw)
+            parts = []
+            
+            # 1. Canais
+            wa = js.get('res_wa')
+            em = js.get('res_email')
+            
+            if wa is not None:
+                parts.append(f"WhatsApp: {'OK' if wa else 'Falha'}")
+            if em is not None:
+                parts.append(f"E-mail: {'OK' if em else 'Falha'}")
+                
+            # 2. Títulos/NFs
+            tits = js.get('titulos', [])
+            if tits:
+                nfs = []
+                for t in tits:
+                    if isinstance(t, dict):
+                        nfs.append(str(t.get('numero_nf') or t.get('id') or ''))
+                    else:
+                        nfs.append(str(t))
+                nf_str = ', '.join(filter(None, nfs))
+                if nf_str:
+                    parts.append(f"NF(s): {nf_str}")
+                
+            if not parts: return det_raw
+            return " | ".join(parts)
+        except:
+            return det_raw
+
+    def ja_foi_cobrado_hoje(self, nome_cliente):
+        """
+        Verifica se existe um log de envio com sucesso para o cliente no dia de hoje.
+        """
+        conn = conectar(self.cnpj_empresa)
+        c = conn.cursor()
+        hoje = datetime.now().strftime("%Y-%m-%d")
+        try:
+            # Busca qualquer log de sucesso hoje para este cliente
+            c.execute("""
+                SELECT count(*) FROM logs_envio 
+                WHERE cliente = ? AND status = 'Sucesso' AND data_envio LIKE ?
+            """, (nome_cliente, f"{hoje}%"))
+            count = c.fetchone()[0]
+            return count > 0
+        except Exception as e:
+            print(f"Erro ao verificar log de cobrança hoje: {e}")
+            return False
+        finally:
+            conn.close()
+
     def _formatar_data_br(self, data_str, incluir_hora=False):
         if not data_str: return "-"
         try:
@@ -204,7 +265,7 @@ class Manager:
         
         return msg
 
-    def buscar_e_zipar_pdfs(self, cliente_nome, itens):
+    def buscar_e_zipar_documentos(self, cliente_nome, itens):
         scanner = MailScanner(self.config)
         arquivos_temp = []
 
@@ -340,7 +401,7 @@ class Manager:
         
         info = fila[nome_cliente]
         msg = self.gerar_mensagem_cobranca(nome_cliente, info['dados_cliente'], info['total'], info['itens'])
-        zip_path, arquivos_temp = self.buscar_e_zipar_pdfs(nome_cliente, info['itens'])
+        zip_path, arquivos_temp = self.buscar_e_zipar_documentos(nome_cliente, info['itens'])
         res = self.executar_processo_completo_cobranca(nome_cliente, msg, zip_path, info['itens'], arquivos_temp)
         return {"success": True, "res": res}
 
@@ -371,7 +432,7 @@ class Manager:
         cli = cli_dados[0]
         
         msg = self.gerar_mensagem_cobranca(tit['pagador'], cli, tit['total'], [tit])
-        zip_path, arquivos_temp = self.buscar_e_zipar_pdfs(tit['pagador'], [tit])
+        zip_path, arquivos_temp = self.buscar_e_zipar_documentos(tit['pagador'], [tit])
         res = self.executar_processo_completo_cobranca(tit['pagador'], msg, zip_path, [tit], arquivos_temp)
         
         return {"success": True, "res": res}
@@ -428,549 +489,195 @@ class Manager:
         return sorted(resumo, key=lambda x: x['cliente'])
 
     def gerar_relatorio_pdf_cobrancas(self, filtros):
-        """
-        Gera um relatório PDF Premium baseado nos filtros (tipo, cliente, periodo).
-        """
         tipo_rel = filtros.get('tipo', 'Todos')
-        cliente = filtros.get('cliente')
+        cliente  = filtros.get('cliente')
         data_inicio = filtros.get('data_inicio')
-        data_fim = filtros.get('data_fim')
-
+        data_fim    = filtros.get('data_fim')
+        
         conn = conectar(self.cnpj_empresa)
-        params = []
-        
-        # Obter nome e logo da empresa para o cabeçalho
-        c = conn.cursor()
-        c.execute("SELECT empresa_nome, logo_b64 FROM config LIMIT 1")
-        row = c.fetchone()
-        empresa_nome = row[0] if row else "EMPRESA NÃO CONFIGURADA"
-        logo_b64 = row[1] if row else None
+        conf = carregar_configuracoes_db(self.cnpj_empresa)
+        empresa_nome = conf.get('empresa_nome', 'Credos System')
 
-        logo_path = None
-        if logo_b64:
-            try:
-                import base64
-                import os
-                if ',' in logo_b64:
-                    logo_b64 = logo_b64.split(',')[1]
-                
-                logo_data = base64.b64decode(logo_b64)
-                # Detectar formato simples
-                ext = "png"
-                if logo_data.startswith(b'\xff\xd8\xff'):
-                    ext = "jpg"
-                elif logo_data.startswith(b'GIF8'):
-                    ext = "gif"
-                
-                logo_path = f"logo_temp_{self.cnpj_empresa}.{ext}"
-                with open(logo_path, "wb") as f:
-                    f.write(logo_data)
-            except Exception as e:
-                print(f"Erro ao decodificar logo: {e}")
-                logo_path = None
-        
-        if tipo_rel == "Cobrados":
-            # === RELATÓRIO DE ATIVIDADES DO PERÍODO ===
-            today = datetime.now().strftime('%Y-%m-%d')
-            dt_ini = (data_inicio + " 00:00:00") if data_inicio else (today + " 00:00:00")
-            dt_fim = (data_fim + " 23:59:59") if data_fim else (today + " 23:59:59")
-            
-            # 1. Cobranças enviadas (WhatsApp/Email) no período
-            q_logs = "SELECT l.data_envio as data_hora, l.cliente as pagador, l.detalhes as details_json, l.tipo_envio as acao_tipo, l.status as resultado, l.usuario FROM logs_envio l WHERE l.data_envio >= ? AND l.data_envio <= ?"
-            p_logs = [dt_ini, dt_fim]
-            if cliente and cliente != "Todos":
-                q_logs += " AND l.cliente = ?"
-                p_logs.append(cliente)
-            
-            df_logs_raw = pd.read_sql_query(q_logs, conn, params=p_logs)
-            
-            # Processar logs para extrair NF e formatar Detalhes
-            logs_rows = []
-            for _, lrow in df_logs_raw.iterrows():
-                nf_val = ""
-                dt_fmt = self._formatar_data_br(str(lrow['data_hora']), incluir_hora=True)
-                usuario = str(lrow.get('usuario') or "Sistema")
-                obs_val = f"Executado em {dt_fmt} por {usuario}"
-                
-                raw_js = lrow.get('details_json') or ''
-                try:
-                    if isinstance(raw_js, str) and raw_js.strip().startswith('{'):
-                        js = json.loads(raw_js)
-                        tits = js.get('titulos', [])
-                        if tits:
-                            t1 = tits[0]
-                            if isinstance(t1, dict):
-                                nf_val = str(t1.get('numero_nf') or t1.get('id') or "")
-                            else:
-                                nf_val = str(t1)
-                except Exception as ex:
-                    print(f"[WARN] Detalhes parse: {ex}")
-                logs_rows.append({
-                    'data_hora': lrow['data_hora'], 'pagador': lrow['pagador'],
-                    'numero_nf': nf_val, 'acao_tipo': str(lrow['acao_tipo'] or ""),
-                    'resultado': str(lrow['resultado'] or ""), 'obs': obs_val,
-                })
-            df_logs = pd.DataFrame(logs_rows)
-            
-            # 2. Ações em títulos (baixa, cancelamento, cartório, etc) no período
-            q_audit = """SELECT a.data_hora, t.pagador, t.numero_nf, a.acao as acao_tipo, a.status_novo as resultado, a.usuario as act_user, (a.status_anterior || ' -> ' || a.status_novo) as transicao FROM auditoria_titulos a LEFT JOIN titulos t ON t.id = a.titulo_id WHERE a.data_hora >= ? AND a.data_hora <= ?"""
-            p_audit = [dt_ini, dt_fim]
-            if cliente and cliente != "Todos":
-                q_audit += " AND t.pagador = ?"
-                p_audit.append(cliente)
-            df_audit_raw = pd.read_sql_query(q_audit, conn, params=p_audit)
-            
-            audit_rows = []
-            for _, arow in df_audit_raw.iterrows():
-                dt_fmt = self._formatar_data_br(str(arow['data_hora']), incluir_hora=True)
-                usuario = str(arow.get('act_user') or "Sistema")
-                trans = str(arow['transicao'])
-                obs_val = f"{trans} (em {dt_fmt} por {usuario})"
-                audit_rows.append({
-                    'data_hora': arow['data_hora'], 'pagador': arow['pagador'],
-                    'numero_nf': str(arow['numero_nf'] or ""), 'acao_tipo': str(arow['acao_tipo'] or ""),
-                    'resultado': str(arow['resultado'] or ""), 'obs': obs_val,
-                })
-            df_audit = pd.DataFrame(audit_rows)
-            
-            df = pd.concat([df_logs, df_audit], ignore_index=True)
-            df['numero_nf'] = df['numero_nf'].fillna('')
-            df['pagador'] = df['pagador'].fillna('Nao identificado')
-            df = df.sort_values("data_hora", ascending=False)
-        
-        elif tipo_rel == "Historico":
-            query = "SELECT * FROM logs_envio WHERE 1=1"
-            if cliente and cliente != "Todos":
-                query += " AND cliente = ?"
+        df = pd.DataFrame()
+
+        # Helper para construir filtros comuns
+        def build_filters(col_data, col_cliente=None):
+            where = []
+            params = []
+            if cliente and cliente != "Todos" and col_cliente:
+                where.append(f"{col_cliente} = ?")
                 params.append(cliente)
-            
             if data_inicio:
-                query += " AND data_envio >= ?"
+                where.append(f"{col_data} >= ?")
                 params.append(data_inicio + " 00:00:00")
             if data_fim:
-                query += " AND data_envio <= ?"
+                where.append(f"{col_data} <= ?")
                 params.append(data_fim + " 23:59:59")
             
-            query += " ORDER BY id DESC"
-            df = pd.read_sql_query(query, conn, params=params)
-        
-        elif tipo_rel == "Exclusoes":
-            # Histórico de exclusões de títulos (auditoria com acao de exclusão)
-            query = """
-                SELECT 
-                    a.data_hora as data_ocorrencia,
-                    t.pagador, t.numero_nf, t.vencimento, t.valor,
-                    a.status_anterior, a.status_novo,
-                    a.acao, a.usuario
-                FROM auditoria_titulos a
-                LEFT JOIN titulos t ON t.id = a.titulo_id
-                WHERE (a.acao LIKE '%exclu%' OR a.acao LIKE '%remov%' OR a.acao LIKE '%delet%' OR a.acao LIKE '%cancel%')
-            """
-            params_ex = []
-            if cliente and cliente != "Todos":
-                query += " AND t.pagador = ?"
-                params_ex.append(cliente)
-            if data_inicio:
-                query += " AND a.data_hora >= ?"
-                params_ex.append(data_inicio + " 00:00:00")
-            if data_fim:
-                query += " AND a.data_hora <= ?"
-                params_ex.append(data_fim + " 23:59:59")
-            query += " ORDER BY a.data_hora DESC"
-            df = pd.read_sql_query(query, conn, params=params_ex)
-        
-        elif tipo_rel == "Negociacoes IA":
-            # Relatório de Negociações geradas pela IA
-            query = """
-                SELECT 
-                    n.criado_em as data_hora,
-                    n.cliente as pagador,
-                    n.mensagem_gerada as mensagem,
-                    n.status_resposta,
-                    (SELECT count(*) FROM titulos WHERE id IN (SELECT value FROM json_each('[' || n.titulos_ids || ']'))) as qtd_titulos
-                FROM negociacoes n
-                WHERE 1=1
-            """
-            params_n = []
-            if cliente and cliente != "Todos":
-                query += " AND n.cliente = ?"
-                params_n.append(cliente)
-            if data_inicio:
-                query += " AND n.criado_em >= ?"
-                params_n.append(data_inicio + " 00:00:00")
-            if data_fim:
-                query += " AND n.criado_em <= ?"
-                params_n.append(data_fim + " 23:59:59")
-            query += " ORDER BY n.id DESC"
-            df = pd.read_sql_query(query, conn, params=params_n)
+            where_str = " AND ".join(where)
+            if where_str:
+                where_str = " AND " + where_str
+            return where_str, params
 
-        elif tipo_rel == "Cartório":
-            # Relatório de Títulos em Cartório (incluindo status da automação)
-            query = """
-                SELECT 
-                    t.numero_nf, t.pagador, t.vencimento, t.valor,
-                    cj.status_automacao, cj.data_execucao, cj.log_erro,
-                    t.id as titulo_id
-                FROM titulos t
-                LEFT JOIN cartorio_jobs cj ON cj.titulo_id = t.id
-                WHERE t.status = 'Cartório' OR cj.id IS NOT NULL
-            """
-            params_c = []
-            if cliente and cliente != "Todos":
-                query += " AND t.pagador = ?"
-                params_c.append(cliente)
-            if data_inicio:
-                query += " AND (cj.data_execucao >= ? OR t.data_atualizacao >= ?)"
-                params_c.extend([data_inicio + " 00:00:00", data_inicio + " 00:00:00"])
-            if data_fim:
-                query += " AND (cj.data_execucao <= ? OR t.data_atualizacao <= ?)"
-                params_c.extend([data_fim + " 23:59:59", data_fim + " 23:59:59"])
-            query += " ORDER BY cj.id DESC, t.vencimento ASC"
-            df = pd.read_sql_query(query, conn, params=params_c)
+        try:
+            if tipo_rel == "Cobrados":
+                where_str, params = build_filters("data_envio", "cliente")
+                query = f"""
+                    SELECT data_envio as data_hora, cliente as pagador, tipo_envio as canal, 
+                           status as resultado, detalhes as obs, usuario
+                    FROM logs_envio
+                    WHERE tipo_envio IN ('Email', 'WhatsApp', 'IA') {where_str}
+                """
+                df = pd.read_sql_query(query, conn, params=params)
 
-        else:
-            # Relatório Financeiro (Todos, Abertos, Pagos)
-            status_filter = ""
-            if tipo_rel == "Pagos":
-                status_filter = "AND t.status IN ('Pago', 'Baixado', 'Recebido')"
-            elif tipo_rel == "Aberto":
-                status_filter = "AND t.status = 'Aberto'"
-            
-            cliente_filter = ""
-            if cliente and cliente != "Todos":
-                params.append(cliente)
-                cliente_filter = "AND t.pagador = ?"
-            
-            query = f"""
-                SELECT 
-                    t.*,
-                    a_last.usuario as aud_usuario,
-                    a_last.data_hora as aud_data,
-                    a_last.acao as aud_acao
-                FROM titulos t
-                LEFT JOIN (
-                    SELECT titulo_id, usuario, data_hora, acao,
-                           ROW_NUMBER() OVER (PARTITION BY titulo_id ORDER BY id DESC) as rn
-                    FROM auditoria_titulos
-                ) a_last ON a_last.titulo_id = t.id AND a_last.rn = 1
-                WHERE 1=1 {status_filter} {cliente_filter}
-                ORDER BY t.vencimento ASC
-            """
-            df = pd.read_sql_query(query, conn, params=params)
-        
-        conn.close()
-        
+            elif tipo_rel == "Baixados":
+                where_str, params = build_filters("a.data_hora", "t.pagador")
+                query = f"""
+                    SELECT a.data_hora, t.pagador, t.numero_nf, t.valor, a.usuario, a.status_novo as status
+                    FROM auditoria_titulos a
+                    JOIN titulos t ON a.titulo_id = t.id
+                    WHERE a.status_novo IN ('Pago', 'Baixado') {where_str}
+                """
+                df = pd.read_sql_query(query, conn, params=params)
+
+            elif tipo_rel == "Cancelados":
+                where_str, params = build_filters("a.data_hora", "t.pagador")
+                query = f"""
+                    SELECT a.data_hora, t.pagador, t.numero_nf, t.valor, a.usuario
+                    FROM auditoria_titulos a
+                    JOIN titulos t ON a.titulo_id = t.id
+                    WHERE a.status_novo = 'Cancelado' {where_str}
+                """
+                df = pd.read_sql_query(query, conn, params=params)
+
+            elif tipo_rel == "Excluidos":
+                where_str, params = build_filters("data_envio", "cliente")
+                query = f"""
+                    SELECT data_envio as data_hora, cliente as pagador, detalhes as obs, usuario
+                    FROM logs_envio
+                    WHERE tipo_envio = 'Exclusão CRM' {where_str}
+                """
+                df = pd.read_sql_query(query, conn, params=params)
+
+            elif tipo_rel == "Solicitado_Cartorio":
+                where_str, params = build_filters("cj.data_execucao", "t.pagador")
+                query = f"""
+                    SELECT cj.data_execucao as data_hora, t.pagador, t.numero_nf, t.valor, cj.status_automacao as status
+                    FROM cartorio_jobs cj
+                    JOIN titulos t ON cj.titulo_id = t.id
+                    WHERE cj.intervacao_manual = 1 {where_str}
+                """
+                df = pd.read_sql_query(query, conn, params=params)
+
+            elif tipo_rel == "Enviado_Cartorio":
+                where_str, params = build_filters("cj.data_execucao", "t.pagador")
+                query = f"""
+                    SELECT cj.data_execucao as data_hora, t.pagador, t.numero_nf, t.valor, cj.status_automacao as status
+                    FROM cartorio_jobs cj
+                    JOIN titulos t ON cj.titulo_id = t.id
+                    WHERE cj.intervacao_manual = 0 {where_str}
+                """
+                df = pd.read_sql_query(query, conn, params=params)
+                
+            elif tipo_rel == "Todos":
+                # Fallback: Combina logs de envio se tipo for Todos
+                where_str, params = build_filters("data_envio", "cliente")
+                query = f"SELECT data_envio as data_hora, cliente as pagador, 'Atividade' as canal, status as resultado, detalhes as obs, usuario FROM logs_envio WHERE 1=1 {where_str}"
+                df = pd.read_sql_query(query, conn, params=params)
+
+        except Exception as e:
+            print(f"Erro ao consultar dados para relatório: {e}")
+            df = pd.DataFrame()
+        finally:
+            conn.close()
+
+        # --- GERAÇÃO DO PDF ---
         pdf = FPDF(orientation='L', unit='mm', format='A4')
         pdf.add_page()
         
-        # Logo do Sistema (Credos) - Canto Superior Esquerdo
-        credos_logo = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'frontend', 'public', 'logo.png')
+        # Logo Credos
+        credos_logo = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'logo.png')
         if os.path.exists(credos_logo):
-            try:
-                # Usando h=12 para altura máxima fixa, mantendo proporção e evitando sobreposição na tabela
-                pdf.image(credos_logo, 10, 10, h=12)
-            except Exception:
-                pass
-        
-        # Logo da Empresa cadastrada - Canto Superior Direito
-        if logo_path and os.path.exists(logo_path):
-            try:
-                # Posição X calculada para a direita (250mm). O documento Paisagem tem 297mm.
-                pdf.image(logo_path, 250, 10, h=12)
-            except Exception as e:
-                print(f"Erro ao inserir logo no PDF: {e}")
-        
-        # Cabeçalho Premium
+            try: pdf.image(credos_logo, 10, 10, h=10)
+            except: pass
+
+        # Cabeçalho
         pdf.set_font("Arial", 'B', 14)
-        pdf.set_y(15) 
+        pdf.set_y(15)
         pdf.cell(0, 6, str(empresa_nome).upper(), 0, 1, 'C')
         
-        # Título amigável do relatório
-        titulos_relatorio = {
-            "Cobrados": "ATIVIDADES DO PERÍODO (COBRANÇAS E MOVIMENTAÇÕES)",
-            "Historico": "HISTÓRICO DE ENVIOS (LOGS)",
-            "Exclusoes": "HISTÓRICO DE EXCLUSÕES",
-            "Aberto": "TÍTULOS EM ABERTO",
-            "Pagos": "TÍTULOS PAGOS / BAIXADOS",
-            "Cartório": "TÍTULOS EM CARTÓRIO"
+        titulos_map = {
+            "Cobrados": "TÍTULOS COBRADOS (OPERADOR & ANALU)",
+            "Baixados": "RELATÓRIO DE TÍTULOS BAIXADOS / PAGOS",
+            "Cancelados": "RELATÓRIO DE TÍTULOS CANCELADOS",
+            "Excluidos": "HISTÓRICO DE EXCLUSÕES NO CRM",
+            "Solicitado_Cartorio": "TÍTULOS SOLICITADOS PARA CARTÓRIO (OPERADOR)",
+            "Enviado_Cartorio": "TÍTULOS ENVIADOS PARA CARTÓRIO (ANALU IA)"
         }
-        nome_rel = titulos_relatorio.get(tipo_rel, f"RELATÓRIO: {tipo_rel.upper()}")
-        
         pdf.set_font("Arial", 'B', 11)
-        pdf.cell(0, 6, nome_rel, 0, 1, 'C')
-        pdf.ln(2)
+        pdf.cell(0, 6, titulos_map.get(tipo_rel, "RELATÓRIO DE ATIVIDADES"), 0, 1, 'C')
         
         pdf.set_font("Arial", '', 8)
-        right_text = f"Emissão: {datetime.now().strftime('%d/%m/%Y %H:%M')}   |   Total: {len(df)} registros"
-        pdf.cell(0, 5, right_text, 0, 1, 'R')
+        pdf.cell(0, 5, f"Período: {data_inicio or 'Início'} até {data_fim or 'Hoje'} | Emissão: {datetime.now().strftime('%d/%m/%Y %H:%M')}", 0, 1, 'R')
+        pdf.ln(5)
 
         if df.empty:
             pdf.ln(20)
             pdf.set_font("Arial", 'B', 12)
-            pdf.cell(0, 10, "Nenhum registro encontrado para estes filtros.", 0, 1, 'C')
+            pdf.cell(0, 10, "Nenhum registro encontrado para este relatório.", 0, 1, 'C')
         else:
+            # Seleção de Colunas
             if tipo_rel == "Cobrados":
-                # === Layout Atividades do Dia ===
-                pdf.set_fill_color(30, 80, 160)
-                pdf.set_text_color(255, 255, 255)
-                pdf.set_font("Arial", 'B', 8)
-                
-                cols_atv = [
-                    ("Data/Hora", 38, 'C'),
-                    ("Pagador / Cliente", 70, 'L'),
-                    ("NF", 15, 'C'),
-                    ("Tipo de Ação", 40, 'C'),
-                    ("Resultado", 28, 'C'),
-                    ("Detalhes / Transição", 86, 'L'),
-                ]
-                for c_name, c_width, _ in cols_atv:
-                    pdf.cell(c_width, 7, c_name, border=1, fill=True, align='C')
-                pdf.ln()
-                
-                pdf.set_text_color(0, 0, 0)
-                pdf.set_font("Arial", '', 7)
-                fill = False
-                for _, r in df.iterrows():
-                    pdf.set_fill_color(240, 245, 255) if fill else pdf.set_fill_color(255, 255, 255)
-                    
-                    resultado = str(r.get('resultado', ''))
-                    if resultado in ('Sucesso', 'Pago', 'Baixado'):
-                        pdf.set_text_color(0, 130, 0)
-                    elif resultado in ('Falha', 'Cancelado'):
-                        pdf.set_text_color(200, 0, 0)
-                    else:
-                        pdf.set_text_color(60, 60, 60)
-                    
-                    data_hora_raw = str(r.get('data_hora', ''))
-                    data_hora = self._formatar_data_br(data_hora_raw, incluir_hora=True)
-                    pagador   = str(r.get('pagador', ''))[:38]
-                    nf        = str(r.get('numero_nf', '') or '')[:10]
-                    acao      = str(r.get('acao_tipo', ''))[:24]
-                    obs       = str(r.get('obs', '') or '').replace('\n', ' ')[:60]
-                    
-                    pdf.set_text_color(0, 0, 0)
-                    pdf.cell(cols_atv[0][1], 6, data_hora, 1, 0, 'C', fill=fill)
-                    pdf.cell(cols_atv[1][1], 6, pagador,   1, 0, 'L', fill=fill)
-                    pdf.cell(cols_atv[2][1], 6, nf,        1, 0, 'C', fill=fill)
-                    pdf.cell(cols_atv[3][1], 6, acao,      1, 0, 'C', fill=fill)
-                    
-                    if resultado in ('Sucesso', 'Pago', 'Baixado'):
-                        pdf.set_text_color(0, 130, 0)
-                    elif resultado in ('Falha', 'Cancelado'):
-                        pdf.set_text_color(200, 0, 0)
-                    
-                    pdf.cell(cols_atv[4][1], 6, resultado[:16], 1, 0, 'C', fill=fill)
-                    pdf.set_text_color(0, 0, 0)
-                    pdf.cell(cols_atv[5][1], 6, obs, 1, 0, 'L', fill=fill)
-                    pdf.ln()
-                    fill = not fill
-                    
-            elif tipo_rel == "Historico":
-                # Layout Premium Histórico (Tabela de Logs)
-                pdf.set_fill_color(30, 80, 160)
-                pdf.set_text_color(255, 255, 255)
-                pdf.set_font("Arial", 'B', 8)
-                
-                cols_hist = [
-                    ("Data/Hora", 35, 'C'),
-                    ("Cliente", 70, 'L'),
-                    ("Ação", 35, 'C'),
-                    ("Status", 25, 'C'),
-                    ("Detalhes", 112, 'L')
-                ]
-                
-                for c_name, c_width, c_align in cols_hist:
-                    pdf.cell(c_width, 7, c_name, border=1, fill=True, align='C')
-                pdf.ln()
-                
-                pdf.set_text_color(0, 0, 0)
-                pdf.set_font("Arial", '', 7)
-                
-                for _, r in df.iterrows():
-                    pdf.cell(cols_hist[0][1], 6, str(r['data_envio']), 1, 0, 'C')
-                    pdf.cell(cols_hist[1][1], 6, str(r['cliente'])[:40], 1, 0, 'L')
-                    pdf.cell(cols_hist[2][1], 6, str(r['tipo_envio'])[:20], 1, 0, 'C')
-                    
-                    status = str(r['status'])
-                    if status == "Sucesso":
-                        pdf.set_text_color(0, 150, 0)
-                    elif status == "Falha":
-                        pdf.set_text_color(200, 0, 0)
-                    else:
-                        pdf.set_text_color(0, 0, 0)
-                        
-                    pdf.cell(cols_hist[3][1], 6, status, 1, 0, 'C')
-                    
-                    pdf.set_text_color(0, 0, 0)
-                    det = str(r['detalhes']).replace('\n', ' ')
-                    if len(det) > 85: det = det[:82] + "..."
-                    pdf.cell(cols_hist[4][1], 6, det, 1, 0, 'L')
-                    pdf.ln()
-                    
-            elif tipo_rel == "Exclusoes":
-                # === Layout Histórico de Exclusões ===
-                pdf.set_fill_color(180, 40, 40)
-                pdf.set_text_color(255, 255, 255)
-                pdf.set_font("Arial", 'B', 8)
-                cols_ex = [
-                    ("Data Ocorrência", 42, 'C'),
-                    ("Pagador / Cliente", 75, 'L'),
-                    ("NF", 15, 'C'),
-                    ("Vencimento", 22, 'C'),
-                    ("Valor R$", 20, 'R'),
-                    ("Ação", 35, 'C'),
-                    ("De → Para", 60, 'L'),
-                    ("Usuário", 28, 'C'),
-                ]
-                for c_name, c_width, _ in cols_ex:
-                    pdf.cell(c_width, 7, c_name, border=1, fill=True, align='C')
-                pdf.ln()
-                pdf.set_text_color(0, 0, 0)
-                pdf.set_font("Arial", '', 7)
-                fill_ex = False
-                for _, r in df.iterrows():
-                    pdf.set_fill_color(255, 235, 235) if fill_ex else pdf.set_fill_color(255, 255, 255)
-                    data_oc_raw = str(r.get('data_ocorrencia', ''))
-                    data_oc = self._formatar_data_br(data_oc_raw, incluir_hora=True)
-                    pagador_ex = str(r.get('pagador', '') or '')[:40]
-                    nf_ex = str(r.get('numero_nf', '') or '')
-                    venc_ex_raw = str(r.get('vencimento', '') or '')
-                    venc_ex = self._formatar_data_br(venc_ex_raw)
-                    valor_ex = f"{float(r.get('valor', 0) or 0):,.2f}"
-                    acao_ex = str(r.get('acao', '') or '')[:20]
-                    transicao = f"{r.get('status_anterior','') or ''} -> {r.get('status_novo','') or ''}"[:35]
-                    usuario_ex = str(r.get('usuario', '') or 'importação')[:15]
-                    pdf.cell(cols_ex[0][1], 6, data_oc,      1, 0, 'C', fill=fill_ex)
-                    pdf.cell(cols_ex[1][1], 6, pagador_ex,   1, 0, 'L', fill=fill_ex)
-                    pdf.cell(cols_ex[2][1], 6, nf_ex,        1, 0, 'C', fill=fill_ex)
-                    pdf.cell(cols_ex[3][1], 6, venc_ex,      1, 0, 'C', fill=fill_ex)
-                    pdf.cell(cols_ex[4][1], 6, valor_ex,     1, 0, 'R', fill=fill_ex)
-                    pdf.cell(cols_ex[5][1], 6, acao_ex,      1, 0, 'C', fill=fill_ex)
-                    pdf.cell(cols_ex[6][1], 6, transicao,    1, 0, 'L', fill=fill_ex)
-                    pdf.cell(cols_ex[7][1], 6, usuario_ex,   1, 0, 'C', fill=fill_ex)
-                    pdf.ln()
-                    fill_ex = not fill_ex
-            
-            else:
-                # Layout Premium Títulos financeiros (Todos, Aberto, Pagos, Cartório)
-                pdf.set_fill_color(30, 80, 160)
-                pdf.set_text_color(255, 255, 255)
-                pdf.set_font("Arial", 'B', 8)
-                
-                cols = [
-                    ("Venc.", 18, 'C'),
-                    ("Status", 18, 'C'),
-                    ("Pagador / Cliente", 65, 'L'),
-                    ("NF", 15, 'C'),
-                    ("Princ. R$", 20, 'R'),
-                    ("Juros R$", 15, 'R'),
-                    ("Multa R$", 15, 'R'),
-                    ("Total R$", 20, 'R'),
-                    ("Atr.", 10, 'C'),
-                    ("Usuário", 25, 'C'),
-                    ("Data Ocorrência", 34, 'C') # Opcionalmente extrair auditoria se viável
-                ]
-                
-                # Renderiza Header
-                for c_name, c_width, c_align in cols:
-                    pdf.cell(c_width, 7, c_name, border=1, fill=True, align='C')
-                pdf.ln()
-                
-                total_princ = 0
-                total_juros = 0
-                total_multa = 0
-                total_geral = 0
-                
-                pdf.set_font("Arial", '', 7)
-                for _, r in df.iterrows():
-                    calc = self.calcular_valores_cdc(r['valor'], r['vencimento'])
-                    
-                    # Vencimento (Verdinho se no futuro, vermelho se atrasado)
-                    venc_br = self._formatar_data_br(str(r['vencimento']))
-                    if calc.get('dias_atraso', 0) > 0:
-                        pdf.set_text_color(180, 0, 0)
-                    else:
-                        pdf.set_text_color(0, 128, 0)
-                    pdf.cell(cols[0][1], 6, venc_br, 1, 0, 'C')
-                    
-                    # Status
-                    status = str(r['status'])
-                    if status in ('Pago', 'Baixado'):
-                        pdf.set_text_color(0, 150, 0)
-                    elif status == 'Cartório':
-                        pdf.set_text_color(200, 0, 0)
-                    else:
-                        pdf.set_text_color(0, 0, 0)
-                    pdf.cell(cols[1][1], 6, status, 1, 0, 'C')
-                    
-                    # Cliente e NF
-                    pdf.set_text_color(0, 0, 0)
-                    cliente_str = str(r['pagador'])[:35]
-                    pdf.cell(cols[2][1], 6, cliente_str, 1, 0, 'L')
-                    pdf.cell(cols[3][1], 6, str(r['numero_nf']), 1, 0, 'C')
-                    
-                    # Valores
-                    pdf.cell(cols[4][1], 6, f"{calc['principal']:,.2f}", 1, 0, 'R')
-                    pdf.cell(cols[5][1], 6, f"{calc['juros']:,.2f}", 1, 0, 'R')
-                    pdf.cell(cols[6][1], 6, f"{calc['multa']:,.2f}", 1, 0, 'R')
-                    
-                    # Total (Vermelho e Negrito)
-                    pdf.set_text_color(200, 0, 0)
-                    pdf.set_font("Arial", 'B', 7)
-                    pdf.cell(cols[7][1], 6, f"{calc['total']:,.2f}", 1, 0, 'R')
-                    
-                    # Atraso e Info (Voltando ao normal)
-                    pdf.set_text_color(0, 0, 0)
-                    pdf.set_font("Arial", '', 7)
-                    pdf.cell(cols[8][1], 6, str(calc.get('dias_atraso', 0)), 1, 0, 'C')
-                    
-                    # Usuário e Data real da Auditoria
-                    aud_user = str(r.get('aud_usuario') or 'importação')
-                    aud_data_raw = str(r.get('aud_data') or '')
-                    aud_data = self._formatar_data_br(aud_data_raw)
-                    pdf.cell(cols[9][1], 6, aud_user[:14], 1, 0, 'C')
-                    pdf.cell(cols[10][1], 6, aud_data, 1, 0, 'C')
-                    
-                    pdf.ln()
-                    
-                    total_princ += calc['principal']
-                    total_juros += calc['juros']
-                    total_multa += calc['multa']
-                    total_geral += calc['total']
-                
-                # Linha de Totais da Tabela (Fundo Cinza)
-                pdf.set_fill_color(220, 230, 240)
-                pdf.set_font("Arial", 'B', 8)
-                pdf.set_text_color(0, 0, 0)
-                
-                # Largura até a NF = 18 + 18 + 65 + 15 = 116
-                pdf.cell(116, 7, f"TOTAIS ({len(df)} registros)", 1, 0, 'R', fill=True)
-                pdf.cell(cols[4][1], 7, f"{total_princ:,.2f}", 1, 0, 'R', fill=True)
-                pdf.cell(cols[5][1], 7, f"{total_juros:,.2f}", 1, 0, 'R', fill=True)
-                pdf.cell(cols[6][1], 7, f"{total_multa:,.2f}", 1, 0, 'R', fill=True)
-                
-                pdf.set_text_color(200, 0, 0)
-                pdf.cell(cols[7][1], 7, f"{total_geral:,.2f}", 1, 0, 'R', fill=True)
-                
-                pdf.set_text_color(0, 0, 0)
-                resto_largura = cols[8][1] + cols[9][1] + cols[10][1]
-                pdf.cell(resto_largura, 7, "", 1, 1, 'C', fill=True)
+                cols = [("Data/Hora", 35), ("Cliente", 65), ("Canal", 25), ("Status", 25), ("Usuário", 30), ("Detalhes", 100)]
+            elif tipo_rel in ("Baixados", "Cancelados", "Solicitado_Cartorio", "Enviado_Cartorio"):
+                cols = [("Data/Hora", 40), ("Cliente", 90), ("NF", 30), ("Valor", 40), ("Complemento", 80)]
+            else: # Excluidos
+                cols = [("Data/Hora", 40), ("Cliente", 90), ("Usuário", 40), ("Ocorrência", 110)]
 
-        # Remover acentos do nome do arquivo para evitar erro no FileResponse
-        import unicodedata
-        tipo_clean = ''.join(c for c in unicodedata.normalize('NFD', tipo_rel) if unicodedata.category(c) != 'Mn')
-        tipo_clean = tipo_clean.replace(' ', '_')
-        pdf_path = f"relatorio_{tipo_clean}_{datetime.now().strftime('%H%M%S')}.pdf"
-        pdf.output(pdf_path)
-        
-        # Limpar logo temporária
-        if logo_path and os.path.exists(logo_path):
-            try:
-                os.remove(logo_path)
-            except:
-                pass
-                
-        return pdf_path
+            # Cabeçalho da Tabela
+            pdf.set_fill_color(30, 80, 160)
+            pdf.set_text_color(255, 255, 255)
+            pdf.set_font("Arial", 'B', 8)
+            for name, width in cols:
+                pdf.cell(width, 7, name, 1, 0, 'C', fill=True)
+            pdf.ln()
 
-    # Alias for backward compatibility se chamado via endpoint antigo
+            # Linhas da Tabela
+            pdf.set_text_color(0, 0, 0)
+            pdf.set_font("Arial", '', 7)
+            fill = False
+            for _, r in df.iterrows():
+                pdf.set_fill_color(245, 245, 250) if fill else pdf.set_fill_color(255, 255, 255)
+                h_data = self._formatar_data_br(str(r.get('data_hora', '')), incluir_hora=True)
+                
+                if tipo_rel == "Cobrados":
+                    pdf.cell(cols[0][1], 6, h_data, 1, 0, 'C', fill=fill)
+                    pdf.cell(cols[1][1], 6, str(r.get('pagador', ''))[:45], 1, 0, 'L', fill=fill)
+                    pdf.cell(cols[2][1], 6, str(r.get('canal', '')), 1, 0, 'C', fill=fill)
+                    pdf.cell(cols[3][1], 6, str(r.get('resultado', '')), 1, 0, 'C', fill=fill)
+                    pdf.cell(cols[4][1], 6, str(r.get('usuario', '') or 'Analu'), 1, 0, 'C', fill=fill)
+                    det = self._humanizar_detalhes(str(r.get('obs', ''))).replace('\n', ' ')
+                    pdf.cell(cols[5][1], 6, det[:75], 1, 0, 'L', fill=fill)
+                
+                elif tipo_rel in ("Baixados", "Cancelados", "Solicitado_Cartorio", "Enviado_Cartorio"):
+                    pdf.cell(cols[0][1], 6, h_data, 1, 0, 'C', fill=fill)
+                    pdf.cell(cols[1][1], 6, str(r.get('pagador', ''))[:60], 1, 0, 'L', fill=fill)
+                    pdf.cell(cols[2][1], 6, str(r.get('numero_nf', '')), 1, 0, 'C', fill=fill)
+                    pdf.cell(cols[3][1], 6, f"R$ {float(r.get('valor', 0)):,.2f}", 1, 0, 'R', fill=fill)
+                    extra = str(r.get('usuario', '') or r.get('status', ''))
+                    pdf.cell(cols[4][1], 6, extra[:60], 1, 0, 'L', fill=fill)
+
+                else: # Excluidos
+                    pdf.cell(cols[0][1], 6, h_data, 1, 0, 'C', fill=fill)
+                    pdf.cell(cols[1][1], 6, str(r.get('pagador', ''))[:60], 1, 0, 'L', fill=fill)
+                    pdf.cell(cols[2][1], 6, str(r.get('usuario', '') or 'Operador'), 1, 0, 'C', fill=fill)
+                    pdf.cell(cols[3][1], 6, str(r.get('obs', ''))[:80], 1, 0, 'L', fill=fill)
+
+                pdf.ln()
+                fill = not fill
+
+        # Retorno do PDF em bytes
+        return pdf.output(dest='S').encode('latin-1')
+
+    # Alias for backward compatibility
     gerar_relatorio_pdf = gerar_relatorio_pdf_cobrancas

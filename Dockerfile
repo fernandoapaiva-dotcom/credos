@@ -8,10 +8,12 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# Install system dependencies (needed for playwright and sqlite)
+# Install system dependencies (needed for playwright, sqlite, and timezone)
+ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     python3-dev \
+    tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install dependencies

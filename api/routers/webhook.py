@@ -721,26 +721,39 @@ async def receber_webhook_evolution(request: Request):
                 _log_webhook(f"Erro ao chamar Gemini: {err}", "ERROR")
                 return {"status": "error"}
 
-            _log_webhook(f"IA gerou: \"{resp[:80]}...\"")
+            _log_webhook(f"IA gerou: \"{resp}\"")
             
             # Processar ações internas ANTES de limpar a mensagem para o cliente
-            if "[AÇÃO: ACORDO_ALCANCADO" in resp:
-                _log_webhook("Ação detectada: ACORDO_ALCANCADO")
-                # Futura lógica de acordo aqui
-            if "[AÇÃO: ENVIAR_BOLETOS]" in resp:
-                _log_webhook("Ação detectada: ENVIAR_BOLETOS")
-                # Futura lógica de envio de boletos aqui
-            if "[AÇÃO: SOLICITAR_LINK_CARTAO]" in resp:
-                _log_webhook("Ação detectada: SOLICITAR_LINK_CARTAO")
-                # Futura lógica de geração de link aqui
+            # Normaliza para facilitar busca insensível a caracteres especiais
+            resp_upper = resp.upper()
             
-            # --- AÇÃO: BUSCAR_NF_EMAIL (Envio via WhatsApp) ---
-            if "[AÇÃO: BUSCAR_NF_EMAIL]" in resp or "ENVIAR_DOCUMENTOS_EMAIL" in resp:
-                is_email_only = "[AÇÃO: ENVIAR_DOCUMENTOS_EMAIL" in resp and "[AÇÃO: BUSCAR_NF_EMAIL]" not in resp
+            if "ACORDO_ALCANCADO" in resp_upper or "PROMESSA:" in resp_upper:
+                _log_webhook("Ação detectada: ACORDO_ALCANCADO / PROMESSA")
+                
+            if "ENVIAR_BOLETOS" in resp_upper or "BUSCAR_NF_EMAIL" in resp_upper or "ENVIAR_DOCUMENTOS_EMAIL" in resp_upper:
+                _log_webhook("Ação de DOCUMENTOS detectada na resposta da IA.")
+            
+            if "SOLICITAR_LINK_CARTAO" in resp_upper:
+                _log_webhook("Ação detectada: SOLICITAR_LINK_CARTAO")
+            
+            # --- AÇÃO: BUSCAR_NF_EMAIL e ENVIAR_BOLETOS (Envio via WhatsApp) ---
+            # Detecção de tipo de documento solicitado
+            wants_boleto = False
+            wants_nf = False
+            if "ENVIAR_BOLETO" in resp_upper: wants_boleto = True
+            if "ENVIAR_NOTA" in resp_upper: wants_nf = True
+            if "ENVIAR_TUDO" in resp_upper or "BUSCAR_NF" in resp_upper:
+                wants_boleto = True
+                wants_nf = True
+                
+            has_doc_action = wants_boleto or wants_nf
+
+            if has_doc_action or "ENVIAR_DOCUMENTOS_EMAIL" in resp_upper:
+                is_email_only = "ENVIAR_DOCUMENTOS_EMAIL" in resp_upper and not has_doc_action
+
                 email_alvo = None
-                if "ENVIAR_DOCUMENTOS_EMAIL:" in resp:
-                    match_e = re.search(r'ENVIAR_DOCUMENTOS_EMAIL:\s*([^]]+)', resp)
-                    if match_e: email_alvo = match_e.group(1).strip()
+                match_e = re.search(r'ENVIAR_DOCUMENTOS_EMAIL[:\s]+([^]\|]+)', resp_upper)
+                if match_e: email_alvo = match_e.group(1).strip()
 
                 _log_webhook(f"🏁 Orquestrando entrega de documentos. Email Alvo: {email_alvo}")
                 try:
@@ -762,7 +775,16 @@ async def receber_webhook_evolution(request: Request):
                         # 2. Envio via WhatsApp (se solicitado)
                         if not is_email_only:
                             for arq in pool_arquivos_global:
-                                if arq.lower().endswith(('.pdf', '.xml', '.boleto')):
+                                fname_lower = os.path.basename(arq).lower()
+                                eh_xml = fname_lower.endswith('.xml')
+                                eh_nf = eh_xml or "procnfe" in fname_lower or "nfe" in fname_lower or "nota" in fname_lower
+                                eh_boleto = not eh_nf and fname_lower.endswith('.pdf')
+                                
+                                enviar_agora = False
+                                if wants_boleto and eh_boleto: enviar_agora = True
+                                if wants_nf and eh_nf: enviar_agora = True
+                                
+                                if enviar_agora:
                                     _log_webhook(f"Enviando {os.path.basename(arq)} via WhatsApp...")
                                     r_midia = evo.enviar_midia(remote_jid, arq)
                                     if not r_midia and "55" in str(remote_jid):
@@ -796,8 +818,9 @@ async def receber_webhook_evolution(request: Request):
                 _atualizar_sessao(cnpj, session_id, estado='aguardando_comprovante', data_promessa=data_p)
                 _log_webhook(f"Promessa de pagamento capturada: {data_p} para {cliente_nome}")
 
-            # LIMPAR todas as tags internas — cliente NUNCA deve ver [AÇÃO:...] ou [Bebot:...]
+            # LIMPAR todas as tags internas — cliente NUNCA deve ver [AÇÃO:...] ou [ACAO:...]
             resp_limpa = re.sub(r'\[AÇÃO:[^\]]*\]', '', resp).strip()
+            resp_limpa = re.sub(r'\[ACAO:[^\]]*\]', '', resp_limpa).strip()
             resp_limpa = re.sub(r'\[Bebot:[^\]]*\]', '', resp_limpa).strip()
             resp_limpa = re.sub(r'\[ACTION:[^\]]*\]', '', resp_limpa).strip()
             resp_limpa = re.sub(r'\[PROMESSA:[^\]]*\]', '', resp_limpa).strip()  # Remove tag interna

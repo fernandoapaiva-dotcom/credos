@@ -148,19 +148,19 @@ class MailScanner:
                     # Se achou uma chave de acesso e o número NÃO é o nosso, é um conflito fatal
                     meta['outra_nf_detectada'] = nfs_reais_na_chave[0]
             
-            # Fallback: Busca padrão se não achou chaves de acesso
-            if not meta['tem_nf'] and not meta.get('outra_nf_detectada'):
-                if re.search(rf'\b0*{nf_search}\b', texto) or nf_search in fname_limpo:
-                    meta['tem_nf'] = True
-                
                 # BUSCA DE CONFLITO EM NÚMEROS SOLTOS: 
                 # Procura outros números de 4 dígitos (comum em NFs dessa empresa)
                 outras_nfs = re.findall(r'\b\d{3,5}\b', texto + " " + fname_limpo)
-                outras_nfs = [n.lstrip('0') for n in outras_nfs if n.lstrip('0') != nf_search and len(n.lstrip('0')) >= 3 and n not in ["2024", "2025", "2026"]]
+                outras_nfs = [n.lstrip('0') for n in outras_nfs if n.lstrip('0') != nf_search and len(n.lstrip('0')) >= 3 and n not in ["2024", "2025", "2026", "2027"]]
                 if outras_nfs and not meta['tem_nf']:
                     meta['outra_nf_detectada'] = outras_nfs[0]
                 else:
                     meta['outra_nf_detectada'] = None
+
+        # 2.5 Reforço para Boletos
+        boleto_words = ['boleto', 'duplicata', 'titulo', 'fatura', 'pagamento']
+        if any(w in fname_limpo for w in boleto_words):
+            meta['provavel_boleto'] = True
 
         # 3. Extração de Valores e Vencimento
         if texto:
@@ -204,7 +204,14 @@ class MailScanner:
 
         pool_metadados = []
         arquivos_temp_lot = []
-        seen_filenames = set() # Controle de deduplicação rigorosa
+        seen_nomes_originais = set()  # Controle de deduplicação pelo nome real do arquivo (evita duplicatas entre emails)
+
+        
+        # ISOLAMENTO: Cada busca usa sua própria subpasta única para evitar
+        # que a limpeza de uma NF apague os arquivos de outra NF.
+        import uuid
+        pasta_destino_isolada = os.path.join(self.pasta_destino, f"nf_{nf_str}_{uuid.uuid4().hex[:8]}")
+        os.makedirs(pasta_destino_isolada, exist_ok=True)
 
         try:
             _, folders = mail.list()
@@ -253,8 +260,8 @@ class MailScanner:
                     ids_unicos.append((p, mid))
                     seen_ids.add(mid)
             
-            # Processamento de Anexos do Pool
-            for pasta, e_id in ids_unicos[:15]:
+            # Processamento de Anexos do Pool (aumentado para 25 e-mails)
+            for pasta, e_id in ids_unicos[:25]:
                 if not self._selecionar_pasta_segura(mail, pasta): continue
                 _, msg_data = mail.fetch(e_id, "(RFC822)")
                 if not msg_data or not msg_data[0]: continue
@@ -277,78 +284,87 @@ class MailScanner:
                     fname = part.get_filename()
                     if fname:
                         fname_clean = self.limpar_nome_arquivo(fname)
-                        # DEDUPLICAÇÃO REAL POR NOME: Impede o envio de 6 arquivos idênticos
-                        if fname_clean.lower() in seen_filenames: continue
-                        seen_filenames.add(fname_clean.lower())
+                        
+                        # DEDUPLICAÇÃO REAL: Pelo nome do arquivo limpo. Se já baixamos o "boleto.pdf", não baixamos de novo
+                        if fname_clean.lower() in seen_nomes_originais: continue
+                        seen_nomes_originais.add(fname_clean.lower())
 
-                        fpath = os.path.join(self.pasta_destino, f"{nf_str}_{e_id.decode()}_{fname_clean}")
+                        fpath = os.path.join(pasta_destino_isolada, f"{nf_str}_{e_id.decode()}_{fname_clean}")
                         with open(fpath, "wb") as f:
+
                             f.write(part.get_payload(decode=True))
                         
                         meta = self.extrair_meta_documento(fpath, cnpj_cliente, nome_cliente, nf_str, vencimento)
                         meta['fpath'] = fpath
                         meta['nome_original'] = fname_clean
                         
-                        # Sistema de Scoring para filtrar lixo (Email de outra NF que apenas cita a 1237)
-                        score = 0
-                        if meta['pertence_cliente']: score += 10
-                        if meta.get('tem_nf'): score += 25  # Aumentado peso da NF
-                        if any(abs(v - alvo) < 0.05 for v in meta['valores'] for alvo in alvos_validos): score += 15
-                        if meta['tem_vencimento']: score += 5
+                        meta['email_id'] = str(e_id.decode())
                         
-                        # PENALIDADE CRÍTICA: Se detectou outra NF que não é a nossa, derruba o score
-                        if meta.get('outra_nf_detectada') and not meta.get('tem_nf'):
-                            score -= 40
-                        
-                        meta['score'] = score
-                        if score >= 15: 
-                            pool_metadados.append(meta)
-                            arquivos_temp_lot.append(fpath)
-                        else:
-                            try: os.remove(fpath)
-                            except: pass
+                        # NOVIDADE: Não deletamos mais nada antecipadamente. 
+                        # Mantemos todos os candidatos para a filtragem "Sniper" final.
+                        pool_metadados.append(meta)
+                        arquivos_temp_lot.append(fpath)
 
-            # --- ETAPA 3: FILTRO SNIPER (REGRA ÚNICA E INFALÍVEL) ---
-            # Um arquivo SÓ É APROVADO se o número da NF alvo estiver EXPLÍCITO no nome.
-            # Não há carona, scores ou heurísticas. Simples e definitivo.
+            # --- ETAPA 3: FILTRO SNIPER (REGRA INTELIGENTE) ---
+            # Um arquivo é aprovado se:
+            # 1. O número da NF estiver no nome (ou na chave de acesso no nome)
+            # 2. OU se a pontuação de conteúdo for alta (Data + Valor batendo exatamente)
+            # 3. NOVIDADE: Se estiver no MESMO E-MAIL de um arquivo que já foi aprovado por NF!
             arquivos_aprovados = set()
-            nf_num = nf_str.lstrip('0')  # Ex: "1237" sem zeros à esquerda
+            emails_com_nf_confirmada = set()
+            nf_num = nf_str.lstrip('0')
 
+            # Passada 1: Identifica e-mails que DEFINITIVAMENTE contêm a NF alvo
             for m in pool_metadados:
                 bname = os.path.basename(m['fpath'])
-                aprovado = False
+                eh_nf_confirmada = False
 
-                # Regra 1: Chave de Acesso de 44 dígitos (padrão SEFAZ) no nome
-                chaves_no_nome = re.findall(r'\d{44}', bname)
+                nome_orig = m.get('nome_original', bname)
+                # Regra 1: Identidade via Nome (NF ou Chave SEFAZ)
+                chaves_no_nome = re.findall(r'\d{44}', nome_orig)
                 if chaves_no_nome:
                     for chave in chaves_no_nome:
-                        # Dígitos 26 a 34 (índices 25:34) = Número da NF na chave
                         nf_na_chave = str(int(chave[25:34]))
                         if nf_na_chave == nf_num:
-                            aprovado = True
-                            print(f"   ✅ APROVADO (chave SEFAZ NF={nf_na_chave}): {bname[:70]}", flush=True)
-                        else:
-                            aprovado = False
-                            print(f"   ❌ REJEITADO (chave diz NF {nf_na_chave}, pedido={nf_num}): {bname[:70]}", flush=True)
-                else:
-                    # Regra 2: Sem chave de acesso — verifica se o número aparece no nome
-                    if nf_num in bname or nf_str in bname:
-                        aprovado = True
-                        print(f"   ✅ APROVADO (NF no nome): {bname[:70]}", flush=True)
-                    else:
-                        print(f"   ❌ REJEITADO (NF {nf_num} ausente no nome): {bname[:70]}", flush=True)
+                            eh_nf_confirmada = True
 
-                if aprovado:
+                nome_sem_chave = re.sub(r'\d{44}', '', nome_orig)
+                # O número da NF precisa ser uma entidade isolada, não parte de um número maior (ex: 51237 != 1237)
+                if not eh_nf_confirmada and re.search(rf'(?<!\d){nf_num}(?!\d)', nome_sem_chave):
+                    eh_nf_confirmada = True
+                
+                if not eh_nf_confirmada and m.get('score', 0) >= 30: # Score Alto = NF Interna
+                    eh_nf_confirmada = True
+
+                if eh_nf_confirmada:
                     arquivos_aprovados.add(m['fpath'])
-                else:
-                    try: os.remove(m['fpath'])
-                    except: pass
+                    emails_com_nf_confirmada.add(m['email_id'])
+                    print(f"   ✅ NF CONFIRMADA: {bname[:60]} (Email: {m['email_id']})")
 
-            # Limpeza de temporários não aprovados
-            for fpath in arquivos_temp_lot:
-                if fpath not in arquivos_aprovados and os.path.exists(fpath):
-                    try: os.remove(fpath)
-                    except: pass
+            # Passada 2: Aprova outros arquivos (Boletos/XMLs) que estão nos mesmos e-mails aprovados
+            for m in pool_metadados:
+                if m['fpath'] in arquivos_aprovados: continue
+                
+                if m['email_id'] in emails_com_nf_confirmada:
+                    # Se está no mesmo email de uma NF aprovada, e é um arquivo útil, a gente deixa passar!
+                    bname = os.path.basename(m['fpath'])
+                    arquivos_aprovados.add(m['fpath'])
+                    print(f"   📎 APROVADO POR ASSOCIAÇÃO (Mesmo e-mail da NF): {bname[:60]}")
+
+            print(f"   Total aprovado: {len(arquivos_aprovados)} arquivo(s) para NF {nf_str}")
+            
+            # Limpeza: remove apenas arquivos NÃO aprovados desta pasta isolada
+            if os.path.exists(pasta_destino_isolada):
+                for f in os.listdir(pasta_destino_isolada):
+                    fp = os.path.join(pasta_destino_isolada, f)
+                    if fp not in arquivos_aprovados and os.path.isfile(fp):
+                        try: os.remove(fp)
+                        except: pass
+                # Remove a subpasta se ficou vazia
+                try:
+                    if not os.listdir(pasta_destino_isolada):
+                        os.rmdir(pasta_destino_isolada)
+                except: pass
 
             try: mail.close()
             except: pass

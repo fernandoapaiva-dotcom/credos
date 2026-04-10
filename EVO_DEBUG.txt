@@ -67,3 +67,8 @@
 [54804458000122] Resposta 200: {"instance":{"instanceName":"54804458000122","state":"open"}}
 [54804458000122] Resposta 200: {"instance":{"instanceName":"54804458000122","state":"open"}}
 [WEBHOOK] Evento: messages.upsert | Instância:  | Payload: {"event": "messages.upsert", "test": true}
+--- [INIT] Instância: 54804458000122 | URL: http://localhost:8080 ---
+--- [INIT] Instância: 54804458000122 | URL: http://localhost:8080 ---
+--- [INIT] Instância: 54804458000122 | URL: http://localhost:8080 ---
+--- [INIT] Instância: 54804458000122 | URL: http://localhost:8080 ---
+--- [INIT] Instância: 54804458000122 | URL: http://localhost:8080 ---

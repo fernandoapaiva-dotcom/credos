@@ -311,15 +311,15 @@ if selected == "Operacional":
                     
                     dados_novos_clientes = {}
                     if novos_clientes_identificados:
-                        st.info(f"✨ Identificamos {len(novos_clientes_identificados)} novos clientes. Preencha os dados abaixo uma única vez:")
-                        for cli_nome in novos_clientes_identificados:
-                            with st.expander(f"👤 Cadastro: {cli_nome}", expanded=True):
-                                c_cnpj, c_zap, c_mail, c_cont = st.columns(4)
-                                cnpj_v = c_cnpj.text_input("CNPJ", key=f"ncnpj_{cli_nome}")
-                                zap_v = c_zap.text_input("WhatsApp", key=f"nzap_{cli_nome}", help="Use ; para separar múltiplos")
-                                mail_v = c_mail.text_input("Email", key=f"nmail_{cli_nome}", help="Use ; para separar múltiplos")
-                                cont_v = c_cont.text_input("Contato", key=f"ncont_{cli_nome}")
-                                dados_novos_clientes[cli_nome] = {'cnpj': cnpj_v, 'whatsapp': zap_v, 'email': mail_v, 'contato': cont_v}
+                        with st.status(f"⚡ {len(novos_clientes_identificados)} Novos Clientes Detectados!", expanded=True):
+                            st.write("Identificamos clientes que ainda não estão na sua base. Preencha os dados abaixo uma única vez para ativá-los:")
+                            for cli_nome in novos_clientes_identificados:
+                                with st.expander(f"👤 Cadastro Expresso: **{cli_nome}**", expanded=True):
+                                    c1, c2, c3 = st.columns([1.5, 1.5, 2])
+                                    cnpj_v = c1.text_input("CNPJ", key=f"ncnpj_{cli_nome}", placeholder="00.000.000/0000-00")
+                                    zap_v = c2.text_input("WhatsApp", key=f"nzap_{cli_nome}", placeholder="55 (00) 00000-0000")
+                                    mail_v = c3.text_input("E-mail Financeiro", key=f"nmail_{cli_nome}", placeholder="cliente@email.com")
+                                    dados_novos_clientes[cli_nome] = {'cnpj': cnpj_v, 'whatsapp': zap_v, 'email': mail_v, 'contato': ''}
                         st.divider()
 
                     rows_final = []
@@ -450,7 +450,7 @@ if selected == "Operacional":
     # Helper para Cobrança
     def processar_cobranca_cliente(cli_nome, cli_info, user, is_simulacao, canais):
         msg = mgr.gerar_mensagem_cobranca(cli_nome, cli_info['dados_cliente'], cli_info['total'], cli_info['itens'])
-        zip_path, temp = mgr.buscar_e_zipar_pdfs(cli_nome, cli_info['itens'])
+        zip_path, temp = mgr.buscar_e_zipar_documentos(cli_nome, cli_info['itens'])
         res = mgr.executar_processo_completo_cobranca(cli_nome, msg, zip_path, cli_info['itens'], temp, usuario=user, simulacao=is_simulacao, canais_selecionados=canais)
         return res
 
@@ -468,12 +468,24 @@ if selected == "Operacional":
                 if not canais_slugs:
                     st.warning("Selecione ao menos um canal.")
                 else:
-                    progress_bar = st.progress(0)
-                    st.info(f"Iniciando envio para {len(rel)} clientes...")
-                    for i, (cli, info) in enumerate(rel.items()):
-                        processar_cobranca_cliente(cli, info, user_logado, is_sim, canais_slugs)
-                        progress_bar.progress((i + 1) / len(rel))
-                    st.success("✅ Processo em massa concluído!"); time.sleep(1); st.rerun()
+                    with st.status("🚀 Iniciando processamento em massa...", expanded=True) as status:
+                        st.write("🔍 Agrupando débitos e verificando arquivos...")
+                        for i, (cli, info) in enumerate(rel.items()):
+                            st.write(f"📤 Enviando cobrança para: **{cli}**...")
+                            res = processar_cobranca_cliente(cli, info, user_logado, is_sim, canais_slugs)
+                            
+                            # Log interno do status no componente
+                            if res['email'] or res['whatsapp']:
+                                st.write(f"✅ {cli} processado com sucesso.")
+                            else:
+                                st.write(f"⚠️ {cli} finalizado com ressalvas (verifique logs).")
+                                
+                        status.update(label="✅ Todos os envios foram processados!", state="complete", expanded=False)
+                    
+                    st.success(f"🚀 O processo em massa para {len(rel)} clientes foi concluído!")
+                    st.balloons()
+                    time.sleep(2)
+                    st.rerun()
 
             st.divider()
             st.markdown(f"### 🚀 Fila: {len(rel)} clientes")
@@ -485,12 +497,13 @@ if selected == "Operacional":
                         if not canais_slugs:
                             st.warning("Selecione ao menos um canal.")
                         else:
-                            res = processar_cobranca_cliente(cli, info, user_logado, is_sim, canais_slugs)
-                            if res['email'] or res['whatsapp']:
-                                label = "Simulado" if is_sim else "Enviada"
-                                st.success(f"Cobrança {label}! (E-mail: {'OK' if res['email'] else 'Não'} | Zap: {'OK' if res['whatsapp'] else 'Não'})")
-                            else:
-                                st.error("Falha no envio. Verifique conexões ou canais.")
+                            with st.spinner(f"🚀 Enviando para {cli}..."):
+                                res = processar_cobranca_cliente(cli, info, user_logado, is_sim, canais_slugs)
+                                if res['email'] or res['whatsapp']:
+                                    label = "Simulado" if is_sim else "Enviada"
+                                    st.success(f"Cobrança {label}! (E-mail: {'OK' if res['email'] else 'Não'} | Zap: {'OK' if res['whatsapp'] else 'Não'})")
+                                else:
+                                    st.error("Falha no envio. Verifique conexões ou canais.")
         else:
             st.info("✅ Tudo em dia! Nenhuma cobrança pendente.")
 

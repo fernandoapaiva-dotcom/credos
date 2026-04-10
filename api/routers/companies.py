@@ -14,10 +14,8 @@ class CompanyCreate(BaseModel):
 @router.get("/")
 def list_companies():
     unidades = carregar_todas_unidades_db()
-    # Adicionar configs como logo_b64 se precisar
-    for u in unidades:
-        conf = carregar_configuracoes_db(u['empresa_cnpj'])
-        u['logo_b64'] = conf.get('logo_b64', '')
+    # Removemos o carregamento de logos em massa para acelerar a listagem
+    # e evitar que o JSON fique gigantesco, travando o frontend.
     return {"companies": unidades}
 
 @router.post("/")

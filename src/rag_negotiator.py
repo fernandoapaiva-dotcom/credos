@@ -83,9 +83,19 @@ class RAGNegotiator:
                 return None, str(e)
         return None, "Tentativas esgotadas."
 
-    def gerar_proposta_ia(self, cliente_nome, info_debitos, dia_numero=1):
-        """Gera mensagem de cobrança para o dia N do ciclo (1-20)."""
+    def gerar_proposta_ia(self, cliente_nome, info_debitos, dia_numero=1, history_list=None):
+        """Gera mensagem de cobrança para o dia N do ciclo (1-20), considerando o histórico se existir."""
         prompt = self.preparar_contexto(cliente_nome, info_debitos)
+        
+        hist_text = ""
+        if history_list:
+            hist_text = "\n--- HISTÓRICO RECENTE DA CONVERSA ---\n"
+            for msg in history_list[-10:]:
+                rolename = "Cliente" if msg.get('role') == 'user' else "Analu"
+                hist_text += f"{rolename}: {msg.get('text')}\n"
+            hist_text += "---\n"
+            prompt += f"\n\n{hist_text}\nINSTRUÇÃO DE MEMÓRIA: Utilize o histórico acima para dar continuidade à conversa de onde pararam. "
+            prompt += "Se o cliente não respondeu sua última mensagem, mencione que ainda aguarda um retorno dele."
         
         if dia_numero <= 5:
             tom = "cordial e amigável, como um primeiro aviso"
@@ -96,8 +106,10 @@ class RAGNegotiator:
         else:
             tom = "muito sério, informando que em poucos dias o título será protestado"
         
+        agora_br = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
         instrucao = (
-            f"Você é Analu, do setor financeiro da {self.config.get('empresa_nome', 'nossa empresa')}. "
+            f"Você é Analu, colaboradora do setor financeiro da {self.config.get('empresa_nome', 'nossa empresa')}. "
+            f"DATA E HORA ATUAL (BR): {agora_br}. "
             f"Escreva como um ser humano real, numa mensagem de WhatsApp. Tom: {tom}. "
             "Máximo 3 frases. Termine perguntando quando consegue pagar."
         )
@@ -141,23 +153,25 @@ class RAGNegotiator:
                 hist_text += f"{rolename}: {msg.get('text')}\n"
             hist_text += "---\n\n"
 
+        agora_br = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
         # ─── PERSONA DA ANALU ──────────────────────────────────────────────────
         system_instruction = (
             f"Você é Analu, colaboradora do setor financeiro da {empresa}. "
+            f"DATA E HORA ATUAL (BR): {agora_br}. "
             "Você conversa pelo WhatsApp com clientes de forma completamente natural e humana. "
             "Você é simpática, direta e profissional — como uma pessoa real, não um chatbot. "
             "\n\nSEU ESTILO DE COMUNICAÇÃO E REGRAS:"
             "\n- Responda SOMENTE ao que o cliente acabou de dizer. Uma coisa de cada vez."
             "\n- Máximo 1 a 2 frases por mensagem. Curto como WhatsApp."
+            "\n- Utilize a hora atual fornecida acima para escolher a saudação correta (Bom dia/Boa tarde/Boa noite)."
             "\n- Não faça listas, não numere, não use bullet points."
             "\n- Nunca mencione nomes de colegas internos."
             "\n- IMPORTANTE: NÃO FAÇA ROLEPLAY. Você TEM os dados na mesma hora. NUNCA Diga 'Um momento, vou verificar', 'So um instante estou puxando as infos'. APENAS DÊ A RESPOSTA (ex: 'Seu débito é de R$ 10,00')."
-            "\n\nSUA MISSÃO DOCUMENTAL:"
-            "\n- Quando o cliente pedir um documento (NF, Boleto, etc), SEJA AFIADA e pergunte se ele prefere receber por aqui no WhatsApp ou se prefere que envie para o E-mail dele."
-            "\n- Se ele escolher E-mail mas não informou qual, PERGUNTE: 'Qual o melhor e-mail para eu te mandar?'."
-            "\n- Se ele informar o e-mail, inclua a tag: |||ACAO: ENVIAR_DOCUMENTOS_EMAIL: endereco@email.com|||."
-            "\n- Se ele quiser por aqui, inclua a tag: |||ACAO: BUSCAR_NF_EMAIL|||."
-            "\n- Nunca diga que não consegue enviar arquivos. Você consegue tudo via sistema, apenas use as tags acima."
+            "\n\nSUA MISSÃO DOCUMENTAL (VELOCIDADE MÁXIMA):"
+            "\n- Se o cliente pedir o Boleto ou a NF, você DEVE disparar a tag [ACAO: ENVIAR_BOLETOS] no mesmo instante. NÃO ENROLE."
+            "\n- ENTREGUE PRIMEIRO, PERGUNTE DEPOIS: Envie o arquivo no WhatsApp e só depois pergunte se ele quer no e-mail também."
+            "\n- É PROIBIDO TENTAR CONVENCER O CLIENTE A USAR PIX SE ELE PEDIU O BOLETO. Entregue o boleto primeiro."
+            "\n- Se o cliente pediu o Boleto, sua resposta deve ser: 'Tudo bem, estou te mandando o boleto agora por aqui'. [ACAO: ENVIAR_BOLETOS]"
         )
 
         # ─── PROMPT DO MOMENTO ─────────────────────────────────────────────────
@@ -216,7 +230,7 @@ class RAGNegotiator:
                 "INSTRUÇÃO: Responda ao que foi dito de forma fluida e natural. "
                 "Caso contrário, conduza gentilmente para a resolução do débito. "
                 "Se o cliente der data de pagamento: |||ACAO: ACORDO_ALCANCADO: DATA|||. "
-                "Se pedir PIX: informe. Se pedir boleto: |||ACAO: ENVIAR_BOLETOS|||. "
+                "Se pedir PIX: informe. Se pedir boleto: [ACAO: ENVIAR_BOLETOS]. "
                 "Esses marcadores NÃO aparecem para o cliente."
             )
             
@@ -225,28 +239,51 @@ class RAGNegotiator:
         
         # Hook de Detecção de Envio de Documento
         if intent != 'saudacao' and num_trocas > 0:
-            prompt += (
-                "\n\n[ATENÇÃO FINAL PARA O SEU TURNO]: "
-                "\n1. INTERPRETE: O cliente quer documento? Ofereça WhatsApp ou E-mail."
-                "\n2. INTERPRETE: Ele passou um e-mail? Use |||ACAO: ENVIAR_DOCUMENTOS_EMAIL: [email]|||."
-                "\n3. SEJA DIRETA: Se ele perguntou o valor, diga o valor com centavos. Sem rodeios."
-                "\n4. NUNCA faça o cliente esperar ('Só um minuto', 'Puxando aqui'). Você já tem os dados na mão. RESPOOOOONDA."
-            )
+            # Verifica se o histórico tem promessa de boleto
+            hist_str = " ".join([m.get('text', '') for m in history_list]).lower()
+            cliente_pediu_boleto = any(w in hist_str or w in mensagem_cliente.lower() 
+                                       for w in ['boleto', 'nota fiscal', 'nf ', 'documento', 'arquivo'])
+            cliente_reclamou = any(w in mensagem_cliente.lower() 
+                                   for w in ['cade', 'cadê', 'não chegou', 'nao chegou', 'deu certo', 'chegou', 'enviou', 'não enviou', 'nao enviou'])
+            
+            if cliente_pediu_boleto or cliente_reclamou:
+                prompt += (
+                    "\n\n[ALERTA VERMELHO]: O cliente quer o documento aguardado. "
+                    "É OBRIGATÓRIO incluir a TAG exata do que ele pediu para liberar o arquivo no sistema! "
+                    "\n- Se ele pediu SÓ BOLETO: [ACAO: ENVIAR_BOLETO]"
+                    "\n- Se ele pediu SÓ NOTA/NF: [ACAO: ENVIAR_NOTA]"
+                    "\n- Se ele pediu AMBOS: [ACAO: ENVIAR_TUDO]"
+                    "\nNUNCA pergunte se ele quer os demais documentos. APENAS envie o que ele pedir e não sugira e-mail."
+                )
+            else:
+                prompt += (
+                    "\n1. INTERPRETE o tipo de documento solicitado:"
+                    "\n   - Quer SÓ o boleto? Despache com [ACAO: ENVIAR_BOLETO]"
+                    "\n   - Quer SÓ a Nota/XML? Despache com [ACAO: ENVIAR_NOTA]"
+                    "\n   - Quer ambos? Despache com [ACAO: ENVIAR_TUDO]"
+                    "\n2. NUNCA pergunte se o cliente quer a nota fiscal se ele pediu apenas o boleto."
+                    "\n3. INTERPRETE: Ele passou um e-mail? Use [ACAO: ENVIAR_DOCUMENTOS_EMAIL: [email]]."
+                    "\n4. NUNCA faça o cliente esperar. Você já tem os dados. Aja mediatamente."
+                )
             
         resposta, erro = self._chamar_gemini(prompt, system_instruction)
         if erro:
             return None, erro
         
-        # Extrai ações ocultas e converte para tags internas do webhook
-        acoes = re.findall(r'\|\|\|ACAO:[^|]*\|\|\|', resposta or '')
+        # Extrai ações e adiciona ao final da resposta limpa
+        acoes = re.findall(r'\[ACAO:[^\]]*\]', resposta or '')
         resposta_limpa = re.sub(r'\|\|\|ACAO:[^|]*\|\|\|', '', resposta or '').strip()
-        # Remove qualquer tag técnica vazada
-        resposta_limpa = re.sub(r'\[AÇÃO:[^\]]*\]', '', resposta_limpa).strip()
+        # Remove tags vazadas no texto 
+        resposta_limpa = re.sub(r'\[A[ÇC]O:[^\]]*\]', '', resposta_limpa).strip()  # Remove [AÇÃO:..] e [ACAO:..]
         resposta_limpa = re.sub(r'\[ACTION:[^\]]*\]', '', resposta_limpa).strip()
+        # Remove qualquer tag [ACAO:] limpa também para não duplicar
+        resposta_limpa = re.sub(r'\[ACAO:[^\]]*\]', '', resposta_limpa).strip()
         resposta_limpa = re.sub(r'\n{3,}', '\n\n', resposta_limpa).strip()
+
+        # Recoloca as tags ACAO no final (o webhook as detecta por lá)
         for acao in acoes:
-            nome = acao.replace('|||ACAO:', '').replace('|||', '').strip()
-            resposta_limpa += f" [AÇÃO: {nome}]"
+            resposta_limpa += f" {acao}"
+        resposta_limpa = resposta_limpa.strip()
         
         return resposta_limpa, None
 

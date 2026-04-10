@@ -11,7 +11,10 @@ from src.ai_handler import get_ai_response
 from src.mail_scanner import MailScanner
 from src.mailer import Mailer
 from src.backup_manager import perform_backup
-from src.worker import verificar_retorno_cartorio, processar_fila_cartorio
+from src.worker import (
+    verificar_retorno_cartorio, processar_fila_cartorio, 
+    disparar_negociacoes_ia, verificar_promessas_d1
+)
 
 # Configuração de Logs (Cria um arquivo robot.log para você ver o que aconteceu)
 logging.basicConfig(
@@ -88,6 +91,11 @@ def executar_rotina_de_cobranca():
             mailer = Mailer(uni) if uni.get('auto_mail') else None
             
             for cliente, info in relatorio.items():
+                # Trava de segurança: já cobrado hoje?
+                if mgr.ja_foi_cobrado_hoje(cliente):
+                    print(f"   ⏭️ {cliente}: Já recebeu cobrança hoje. Pulando.")
+                    continue
+
                 total_divida = info['total']
                 itens = info['itens'] # Lista de NFs/Boletos
                 
@@ -145,6 +153,23 @@ def rotina_backup_diario():
         else:
             logging.error(f"Falha no backup programado: {result}")
 
+def rotina_analu_ia():
+    agora = datetime.datetime.now()
+    dia_semana_hoje = agora.weekday() # 0 a 6 (Segunda=0)
+    
+    # Executa apenas de Segunda a Sexta
+    if dia_semana_hoje <= 4:
+        print(f"🤖 [Analu] Iniciando ciclo de negociação autônoma...")
+        logging.info("🤖 Iniciando ciclo de negociação autônoma (Analu)")
+        try:
+            # 1. Verifica promessas vencidas primeiro
+            verificar_promessas_d1()
+            # 2. Dispara ciclo de 20 dias
+            disparar_negociacoes_ia()
+            logging.info("🤖 Ciclo Analu finalizado com sucesso.")
+        except Exception as e:
+            logging.error(f"❌ Erro na rotina Analu IA: {e}")
+
 # Agendamento: 
 # Roda a rotina de cobrança a cada 1 minuto
 schedule.every().minute.do(executar_rotina_de_cobranca)
@@ -154,6 +179,8 @@ schedule.every().minute.do(rotina_backup_diario)
 schedule.every(5).minutes.do(processar_fila_cartorio)
 # Verifica retorno do cartório todo dia às 10:00
 schedule.every().day.at("10:00").do(verificar_retorno_cartorio)
+# Rotina Analu (IA) de Segunda a Sexta às 09:00
+schedule.every().day.at("09:00").do(rotina_analu_ia)
 
 if __name__ == "__main__":
     print("🤖 Robô Credos Ativado.")

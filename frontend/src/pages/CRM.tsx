@@ -38,6 +38,10 @@ export const CRM: React.FC = () => {
   const [loadingClients, setLoadingClients] = useState(false);
   const [loadingTitles, setLoadingTitles] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
+  const [isChargingBulk, setIsChargingBulk] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState(0);
+  const [bulkTotal, setBulkTotal] = useState(0);
+  const [currentChargingName, setCurrentChargingName] = useState('');
 
   // Client Edit State
   const [isEditingClient, setIsEditingClient] = useState(false);
@@ -75,6 +79,7 @@ export const CRM: React.FC = () => {
   }, []);
 
   const fetchVouchers = async () => {
+    if (!companyCnpj) return;
     setLoadingVouchers(true);
     try {
       const res = await api.get('/crm/vouchers');
@@ -97,6 +102,7 @@ export const CRM: React.FC = () => {
   };
 
   const fetchClients = async () => {
+    if (!companyCnpj) return;
     setLoadingClients(true);
     try {
       const res = await api.get('/crm/clients');
@@ -109,6 +115,7 @@ export const CRM: React.FC = () => {
   };
 
   const fetchTitles = async (nome: string) => {
+    if (!companyCnpj) return;
     setLoadingTitles(true);
     try {
       const res = await api.get(`/crm/clients/${nome}/titles`);
@@ -177,15 +184,30 @@ export const CRM: React.FC = () => {
   const confirmChargeAll = async () => {
     if (previewData.length === 0) return;
     setIsShowingPreview(false);
-    setActionLoading(true);
-    try {
-      const res = await api.post('/crm/charge-all');
-      alert(`Processo iniciado! Total de envios realizados: ${res.data.total_envios}`);
-    } catch(e) {
-      alert("Erro ao processar cobrança em massa.");
-    } finally {
-      setActionLoading(false);
+    setIsChargingBulk(true);
+    setBulkTotal(previewData.length);
+    setBulkProgress(0);
+    
+    let successCount = 0;
+    let failCount = 0;
+
+    for (let i = 0; i < previewData.length; i++) {
+      const client = previewData[i];
+      setCurrentChargingName(client.cliente);
+      try {
+        await api.post(`/crm/clients/${client.cliente}/charge`);
+        successCount++;
+      } catch (e) {
+        console.error(`Erro ao cobrar ${client.cliente}`, e);
+        failCount++;
+      }
+      setBulkProgress(i + 1);
     }
+
+    setIsChargingBulk(false);
+    alert(`Processo concluído!\nSucesso: ${successCount}\nFalhas: ${failCount}`);
+    fetchClients();
+    if (selectedClient) fetchTitles(selectedClient.nome);
   };
 
   const handleChargeClient = async () => {
@@ -217,10 +239,6 @@ export const CRM: React.FC = () => {
   const handleEditInit = () => {
     if (!selectedClient) return;
     setEditClientData({
-      nome: selectedClient.nome,
-      cnpj: selectedClient.cnpj,
-      email: selectedClient.email,
-      whatsapp: selectedClient.whatsapp,
       contato: selectedClient.contato
     });
     setIsEditingClient(true);
@@ -560,6 +578,13 @@ export const CRM: React.FC = () => {
                           className="px-4 py-2 text-xs font-black uppercase tracking-wider rounded-xl bg-red-100 text-red-700 hover:bg-red-600 hover:text-white transition-all shadow-sm flex items-center gap-2"
                         >
                           <Building2 size={16} /> Enviar p/ Cartório
+                        </button>
+                        <button 
+                          onClick={() => handleBulkUpdateStatus('Cancelado', 'Pausar')}
+                          disabled={actionLoading}
+                          className="px-4 py-2 text-xs font-black uppercase tracking-wider rounded-xl bg-slate-100 text-slate-700 hover:bg-slate-600 hover:text-white transition-all shadow-sm flex items-center gap-2"
+                        >
+                          <X size={16} /> Cancelar Títulos
                         </button>
                       </div>
                     )}
@@ -938,17 +963,20 @@ export const CRM: React.FC = () => {
                       value={editClientData.whatsapp} 
                       onChange={e => setEditClientData({...editClientData, whatsapp: e.target.value})} 
                       className="input-field bg-slate-50 dark:bg-slate-800/50 border-slate-200 dark:border-slate-700 p-3 text-sm font-bold" 
-                      placeholder="55..." 
+                      placeholder="Ex: 5511999999999; 5511888888888" 
                     />
+                    <p className="text-[10px] text-slate-400 mt-1 ml-1 font-bold italic">Separe múltiplos números com ";"</p>
                   </div>
                   <div>
                     <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-1.5 ml-1">E-mail</label>
                     <input 
-                      type="email" 
+                      type="text" 
                       value={editClientData.email} 
                       onChange={e => setEditClientData({...editClientData, email: e.target.value})} 
                       className="input-field bg-slate-50 dark:bg-slate-800/50 border-slate-200 dark:border-slate-700 p-3 text-sm font-bold" 
+                      placeholder="Ex: financeiro@email.com; contato@email.com"
                     />
+                    <p className="text-[10px] text-slate-400 mt-1 ml-1 font-bold italic">Separe múltiplos e-mails com ";"</p>
                   </div>
                 </div>
 
@@ -977,6 +1005,44 @@ export const CRM: React.FC = () => {
           </div>
         </div>
       )}
+      {/* MODAL DE PROGRESSO DE ENVIO EM MASSA */}
+      {isChargingBulk && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-dark-surface rounded-3xl shadow-2xl w-full max-w-md p-8 text-center animate-in zoom-in duration-300">
+            <div className="mb-6 relative flex justify-center">
+              <div className="w-24 h-24 rounded-full border-4 border-slate-100 dark:border-dark-border flex items-center justify-center shadow-inner">
+                 <Loader2 size={40} className="text-primary-500 animate-spin" />
+              </div>
+              <div className="absolute top-0 right-1/4 bg-primary-500 text-white text-[10px] h-6 w-6 flex items-center justify-center rounded-full font-black animate-bounce">
+                {Math.round((bulkProgress / bulkTotal) * 100)}%
+              </div>
+            </div>
+            
+            <h3 className="text-2xl font-black text-slate-900 dark:text-white mb-2">Processando Disparos</h3>
+            <p className="text-sm text-slate-500 mb-6">Enviando cobranças para sua carteira...</p>
+            
+            <div className="space-y-4">
+              <div className="flex justify-between items-center text-xs font-bold uppercase tracking-wider">
+                <span className="text-primary-600">Progresso</span>
+                <span className="text-slate-400">{bulkProgress} / {bulkTotal}</span>
+              </div>
+              
+              <div className="h-3 w-full bg-slate-100 dark:bg-dark-bg rounded-full overflow-hidden shadow-inner">
+                <div 
+                  className="h-full bg-primary-500 transition-all duration-500 ease-out shadow-[0_0_15px_rgba(var(--primary-rgb),0.5)]"
+                  style={{ width: `${(bulkProgress / bulkTotal) * 100}%` }}
+                />
+              </div>
+
+              <div className="pt-4 px-4 py-3 bg-slate-50 dark:bg-dark-bg/50 rounded-2xl border border-slate-100 dark:border-dark-border">
+                <p className="text-[10px] text-slate-400 uppercase font-black mb-1">Enviando agora para:</p>
+                <p className="text-sm font-bold text-slate-700 dark:text-slate-200 truncate">{currentChargingName || 'Iniciando...'}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* AI NEGOTIATION MODAL */}
       {showAiModal && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">

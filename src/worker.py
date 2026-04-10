@@ -92,8 +92,8 @@ def disparar_cobranca_automatica(forcar_execucao=False, cnpj_filtro=None):
                     # 3. Gera Mensagem Inteligente (Calcula se tem aviso de 10 dias internamente)
                     msg = mgr.gerar_mensagem_cobranca(cliente_nome, info['dados_cliente'], info['total'], info['itens'])
                     
-                    # Busca PDFs atualizados no email
-                    zip_path, arquivos_temp = mgr.buscar_e_zipar_pdfs(cliente_nome, info['itens'])
+                    # Busca Documentos (NF/XML/Boleto) atualizados no email
+                    zip_path, arquivos_temp = mgr.buscar_e_zipar_documentos(cliente_nome, info['itens'])
                     
                     # 4. Executa Envio
                     res = mgr.executar_processo_completo_cobranca(
@@ -136,16 +136,42 @@ def disparar_negociacoes_ia(cnpj_filtro=None):
     
     for ag in agendamentos:
         cnpj = ag['empresa_dona_cnpj']
+        # Verifica se hoje e este horário são permitidos
+        hoje_semana = datetime.now().weekday()
+        hora_atual = datetime.now().strftime("%H:%M")
+        
+        import json
+        mapping_dias = {'Segunda':0, 'Terça':1, 'Quarta':2, 'Quinta':3, 'Sexta':4, 'Sábado':5, 'Domingo':6}
+        try:
+            raw_dias = ag.get('dias_ui', '[]')
+            if '[' in raw_dias:
+                dias_nomes = json.loads(raw_dias)
+                dias_permitidos = [mapping_dias.get(d) for d in dias_nomes if mapping_dias.get(d) is not None]
+            else:
+                dias_permitidos = [int(d) for d in raw_dias.split(",") if d.strip()]
+        except: dias_permitidos = []
+
+        if hoje_semana not in dias_permitidos:
+            continue
+            
+        horario_esperado = ag.get('horario_envio', '09:00')
+        if hora_atual != horario_esperado:
+            continue
+
         try:
             mgr = Manager(cnpj)
             rag = RAGNegotiator(cnpj)
             config = carregar_configuracoes_db(cnpj)
             config['empresa_cnpj'] = cnpj
-            evo = EvolutionController(config=config, nome_empresa_cliente=config.get('empresa_nome'))
+            evo = EvolutionController(config=config, nome_empresa_cliente=cnpj)
             operador_num = config.get('operador_whatsapp')
 
             fila = mgr.agrupar_debitos_por_cliente()
             for cliente, info in fila.items():
+                if mgr.ja_foi_cobrado_hoje(cliente):
+                    print(f"   ⏭️ {cliente}: Já recebeu cobrança hoje. Pulando ciclo IA.")
+                    continue
+
                 itens_elegíveis = [it for it in info['itens'] if it.get('dias_atraso', 0) >= 1]
                 if not itens_elegíveis:
                     continue
@@ -262,10 +288,31 @@ def disparar_negociacoes_ia(cnpj_filtro=None):
 
                 print(f"   🤖 Dia {dia_atual}/20 — Gerando mensagem IA para {cliente}...")
                 info_debito = {'total': sum(it.get('total', 0) for it in itens_elegíveis), 'itens': itens_elegíveis}
-                msg_ia = rag.gerar_proposta_ia(cliente, info_debito, dia_numero=dia_atual)
+                
+                # Extrai o histórico da sessão para a IA ter memória
+                history_list = []
+                try:
+                    if sessao.get('history_json'):
+                        history_list = json.loads(sessao['history_json'])
+                except: pass
+
+                msg_ia = rag.gerar_proposta_ia(cliente, info_debito, dia_numero=dia_atual, history_list=history_list)
 
                 for num in numeros:
                     evo.enviar_mensagem_texto(num, msg_ia)
+                
+                # Envio opcional de documentos (ZIP) durante o ciclo IA - Mesma regra da Analu (XML/Boleto/NF)
+                try:
+                    zip_path, arquivos_temp = mgr.buscar_e_zipar_documentos(cliente, info_debito['itens'])
+                    if zip_path:
+                        for num in numeros:
+                            evo.enviar_midia(num, zip_path)
+                        # Cleanup
+                        if os.path.exists(zip_path): os.remove(zip_path)
+                        for f in arquivos_temp:
+                            if os.path.exists(f): os.remove(f)
+                except Exception as e_zip:
+                    print(f"   ⚠️ [ZIP IA] Erro ao anexar documentos para {cliente}: {e_zip}")
 
                 # Avança o dia de cobrança
                 conn4 = conectar(cnpj)
@@ -399,7 +446,7 @@ def verificar_acordos_vencidos(cnpj_filtro=None):
                 continue
                 
             config = carregar_configuracoes_db(cnpj)
-            evo = EvolutionController(config=config, nome_empresa_cliente=config.get('empresa_nome'))
+            evo = EvolutionController(config=config, nome_empresa_cliente=cnpj)
             operador_num = config.get('operador_whatsapp')
             
             for s in sessoes:
@@ -465,7 +512,7 @@ def verificar_retorno_cartorio(cnpj_filtro=None):
                   AND t.data_envio_cartorio <= datetime('now', '-5 days')
             """).fetchall()
 
-            evo = EvolutionController(config=config, nome_empresa_cliente=config.get('empresa_nome'))
+            evo = EvolutionController(config=config, nome_empresa_cliente=cnpj)
 
             for tit in titulos_aguardando:
                 tit = dict(tit)
@@ -557,7 +604,7 @@ def verificar_promessas_d1(cnpj_filtro=None):
                 continue
 
             config = carregar_configuracoes_db(cnpj)
-            evo = EvolutionController(config=config, nome_empresa_cliente=config.get('empresa_nome'))
+            evo = EvolutionController(config=config, nome_empresa_cliente=cnpj)
 
             for sess in sessoes_vencidas:
                 sess = dict(sess)
@@ -565,6 +612,12 @@ def verificar_promessas_d1(cnpj_filtro=None):
                 sessao_id = sess['id']
                 numero = sess.get('whatsapp') or sess.get('numero_whatsapp', '')
                 data_prom = sess.get('data_promessa', '')
+
+                # Trava: já cobrado hoje? (pode ser manual ou outra rotina)
+                mgr = Manager(cnpj)
+                if mgr.ja_foi_cobrado_hoje(cliente):
+                    print(f"   ⏭️ {cliente}: Já recebeu contato hoje. Pulando follow-up.")
+                    continue
 
                 # Verifica se já chegou comprovante depois da promessa
                 comp = conn.cursor().execute(
@@ -644,7 +697,7 @@ def resumo_e_execucao_cartorio_noturno(cnpj_filtro=None):
                 continue
 
             config = carregar_configuracoes_db(cnpj)
-            evo = EvolutionController(config=config, nome_empresa_cliente=config.get('empresa_nome'))
+            evo = EvolutionController(config=config, nome_empresa_cliente=cnpj)
             operador_num = config.get('operador_whatsapp')
 
             # 1. Resumo ao operador antes de executar
