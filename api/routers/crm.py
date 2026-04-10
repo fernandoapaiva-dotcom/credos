@@ -30,6 +30,9 @@ class TitleStatusUpdate(BaseModel):
     acao: str   # "Cobrar", "Pausar"
     data_promessa: Optional[str] = None # Para o caso de Negociado
 
+class ChargePayload(BaseModel):
+    canais: List[str] = ["whatsapp", "email"]
+
 @router.get("/clients")
 def get_clients(x_company_cnpj: str = Header(...)):
     cnpj = get_cnpj(x_company_cnpj)
@@ -132,16 +135,18 @@ def preview_charge_all(x_company_cnpj: str = Header(...)):
     return {"success": True, "preview": resumo}
 
 @router.post("/clients/{nome}/charge")
-def charge_client(nome: str, x_company_cnpj: str = Header(...)):
+def charge_client(nome: str, payload: Optional[ChargePayload] = None, x_company_cnpj: str = Header(...)):
     from src.manager import Manager
     mgr = Manager(get_cnpj(x_company_cnpj))
-    return mgr.cobrar_cliente_especifico(nome)
+    canais = payload.canais if payload else ["whatsapp", "email"]
+    return mgr.cobrar_cliente_especifico(nome, canais_selecionados=canais)
 
 @router.post("/titles/{id}/charge")
-def charge_title(id: int, x_company_cnpj: str = Header(...)):
+def charge_title(id: int, payload: Optional[ChargePayload] = None, x_company_cnpj: str = Header(...)):
     from src.manager import Manager
     mgr = Manager(get_cnpj(x_company_cnpj))
-    return mgr.cobrar_titulo_unico(id)
+    canais = payload.canais if payload else ["whatsapp", "email"]
+    return mgr.cobrar_titulo_unico(id, canais_selecionados=canais)
 
 # ─── GESTÃO DE COMPROVANTES RECEBIDOS ─────────────────────────
 

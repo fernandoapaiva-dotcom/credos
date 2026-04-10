@@ -297,7 +297,8 @@ class Manager:
         
         return zip_name, arquivos_temp
 
-    def executar_processo_completo_cobranca(self, cliente_nome, msg, zip_path, itens, arquivos_temp):
+    def executar_processo_completo_cobranca(self, cliente_nome, msg, zip_path, itens, arquivos_temp, canais_selecionados=None):
+        if canais_selecionados is None: canais_selecionados = ["whatsapp", "email"]
         res_wa = False
         res_email = False
         
@@ -327,7 +328,7 @@ class Manager:
         
         # 1. Enviar WhatsApp via Evolution
         whatsapp_raw = cli.get('whatsapp')
-        if whatsapp_raw:
+        if whatsapp_raw and 'whatsapp' in canais_selecionados:
             numeros = [n.strip() for n in whatsapp_raw.split(';') if n.strip()]
             for num in numeros:
                 success = self.evo.enviar_mensagem_texto(num, msg)
@@ -342,7 +343,7 @@ class Manager:
         email_user = self.config.get('fin_mail_user')
         email_pass = self.config.get('fin_mail_pass')
 
-        if email_raw and smtp_srv and email_user and email_pass:
+        if email_raw and smtp_srv and email_user and email_pass and 'email' in canais_selecionados:
             destinatarios = [e.strip() for e in email_raw.split(';') if e.strip()]
             try:
                 for dest in destinatarios:
@@ -394,7 +395,8 @@ class Manager:
             
         return {"whatsapp": res_wa, "email": res_email}
 
-    def cobrar_cliente_especifico(self, nome_cliente):
+    def cobrar_cliente_especifico(self, nome_cliente, canais_selecionados=None):
+        if canais_selecionados is None: canais_selecionados = ["whatsapp", "email"]
         fila = self.agrupar_debitos_por_cliente()
         if nome_cliente not in fila:
             return {"success": False, "message": "Nenhuma pendência para este cliente."}
@@ -402,10 +404,11 @@ class Manager:
         info = fila[nome_cliente]
         msg = self.gerar_mensagem_cobranca(nome_cliente, info['dados_cliente'], info['total'], info['itens'])
         zip_path, arquivos_temp = self.buscar_e_zipar_documentos(nome_cliente, info['itens'])
-        res = self.executar_processo_completo_cobranca(nome_cliente, msg, zip_path, info['itens'], arquivos_temp)
+        res = self.executar_processo_completo_cobranca(nome_cliente, msg, zip_path, info['itens'], arquivos_temp, canais_selecionados=canais_selecionados)
         return {"success": True, "res": res}
 
-    def cobrar_titulo_unico(self, id_titulo):
+    def cobrar_titulo_unico(self, id_titulo, canais_selecionados=None):
+        if canais_selecionados is None: canais_selecionados = ["whatsapp", "email"]
         conn = conectar(self.cnpj_empresa)
         c = conn.cursor()
         c.execute("SELECT * FROM titulos WHERE id=?", (id_titulo,))
@@ -433,7 +436,7 @@ class Manager:
         
         msg = self.gerar_mensagem_cobranca(tit['pagador'], cli, tit['total'], [tit])
         zip_path, arquivos_temp = self.buscar_e_zipar_documentos(tit['pagador'], [tit])
-        res = self.executar_processo_completo_cobranca(tit['pagador'], msg, zip_path, [tit], arquivos_temp)
+        res = self.executar_processo_completo_cobranca(tit['pagador'], msg, zip_path, [tit], arquivos_temp, canais_selecionados=canais_selecionados)
         
         return {"success": True, "res": res}
 

@@ -38,6 +38,7 @@ export const CRM: React.FC = () => {
   const [loadingClients, setLoadingClients] = useState(false);
   const [loadingTitles, setLoadingTitles] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
+  const [selectedChannels, setSelectedChannels] = useState<'whatsapp' | 'email' | 'ambos'>('ambos');
   const [isChargingBulk, setIsChargingBulk] = useState(false);
   const [bulkProgress, setBulkProgress] = useState(0);
   const [bulkTotal, setBulkTotal] = useState(0);
@@ -195,7 +196,8 @@ export const CRM: React.FC = () => {
       const client = previewData[i];
       setCurrentChargingName(client.cliente);
       try {
-        await api.post(`/crm/clients/${client.cliente}/charge`);
+        const canaisArray = selectedChannels === 'ambos' ? ['whatsapp', 'email'] : [selectedChannels];
+        await api.post(`/crm/clients/${client.cliente}/charge`, { canais: canaisArray });
         successCount++;
       } catch (e) {
         console.error(`Erro ao cobrar ${client.cliente}`, e);
@@ -900,21 +902,45 @@ export const CRM: React.FC = () => {
               )}
             </div>
 
-            <div className="p-6 border-t border-slate-100 dark:border-dark-border bg-slate-50/30 dark:bg-dark-surface flex gap-4">
-              <button 
-                onClick={() => setIsShowingPreview(false)} 
-                className="flex-1 py-3 text-sm font-bold text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 transition-colors"
-              >
-                Cancelar
-              </button>
-              <button 
-                onClick={confirmChargeAll}
-                disabled={previewData.length === 0 || actionLoading}
-                className="flex-[2] bg-primary-600 hover:bg-primary-700 text-white py-3 rounded-xl font-black shadow-lg shadow-primary-500/20 flex justify-center items-center gap-2 disabled:opacity-50"
-              >
-                <Send size={18} />
-                Confirmar Disparos
-              </button>
+            <div className="p-6 border-t border-slate-100 dark:border-dark-border bg-slate-50/30 dark:bg-dark-surface flex flex-col md:flex-row gap-4 items-center justify-between">
+              
+              <div className="flex bg-slate-200/50 dark:bg-dark-bg p-1 rounded-xl shadow-inner border border-slate-200 dark:border-dark-border w-full justify-center md:w-auto">
+                <button 
+                  onClick={() => setSelectedChannels('email')} 
+                  className={`px-4 py-2 text-xs font-bold rounded-lg transition-colors flex-1 md:flex-none ${selectedChannels === 'email' ? 'bg-white dark:bg-slate-700 shadow-sm text-primary-600' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400'}`}
+                >
+                  ✉️ Só E-mail
+                </button>
+                <button 
+                  onClick={() => setSelectedChannels('whatsapp')} 
+                  className={`px-4 py-2 text-xs font-bold rounded-lg transition-colors flex-1 md:flex-none ${selectedChannels === 'whatsapp' ? 'bg-white dark:bg-slate-700 shadow-sm text-green-600' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400'}`}
+                >
+                  💬 Só WhatsApp
+                </button>
+                <button 
+                  onClick={() => setSelectedChannels('ambos')} 
+                  className={`px-4 py-2 text-xs font-bold rounded-lg transition-colors flex-[1.5] md:flex-none ${selectedChannels === 'ambos' ? 'bg-white dark:bg-slate-700 shadow-sm text-indigo-600' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400'}`}
+                >
+                  🚀 WhatsApp + E-mail
+                </button>
+              </div>
+
+              <div className="flex gap-4 w-full md:w-auto mt-2 md:mt-0">
+                  <button 
+                    onClick={() => setIsShowingPreview(false)} 
+                    className="flex-1 md:flex-none py-3 px-6 text-sm font-bold text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 transition-colors"
+                  >
+                    Cancelar
+                  </button>
+                  <button 
+                    onClick={confirmChargeAll}
+                    disabled={previewData.length === 0 || actionLoading}
+                    className="flex-[2] md:flex-none bg-primary-600 hover:bg-primary-700 text-white py-3 px-8 rounded-xl font-black shadow-lg shadow-primary-500/20 flex justify-center items-center gap-2 disabled:opacity-50 transition-all hover:scale-[1.02]"
+                  >
+                    <Send size={18} />
+                    Confirmar Disparos
+                  </button>
+              </div>
             </div>
           </div>
         </div>
