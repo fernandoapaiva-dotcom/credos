@@ -653,8 +653,6 @@ export const Settings: React.FC = () => {
                 </div>
              </div>
 
-             </div>
-
              <div className="flex justify-end pt-4 gap-3">
               <button onClick={testIA} disabled={testingIA} className="btn-secondary group">
                 {testingIA ? (
