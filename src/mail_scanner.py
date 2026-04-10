@@ -108,7 +108,7 @@ class MailScanner:
 
     def extrair_meta_documento(self, filepath, cnpj_alvo, nome_alvo, nf_alvo, vencimento_alvo):
         """Extrai todos os metadados matemáticos e de identidade do arquivo."""
-        meta = {'pertence_cliente': False, 'tem_nf': False, 'valores': set(), 'tem_vencimento': False, 'eh_imagem': False}
+        meta = {'pertence_cliente': False, 'tem_nf': False, 'valores': set(), 'tem_vencimento': False, 'eh_imagem': False, 'conflito_identidade': False}
         texto = self._extrair_texto_arquivo(filepath)
         fname_limpo = os.path.basename(filepath).lower()
         
@@ -118,21 +118,41 @@ class MailScanner:
         if not texto:
             meta['eh_imagem'] = True
             
-        cnpj_limpo = re.sub(r'\D', '', str(cnpj_alvo)) if cnpj_alvo else ""
-        if cnpj_limpo and "54804458000122" in cnpj_limpo:
-            cnpj_limpo = ""
+        cnpj_alvo_limpo = re.sub(r'\D', '', str(cnpj_alvo)) if cnpj_alvo else ""
+        
+        # 0. Identificação de CNPJs (Extrator de Precisão)
+        # Busca CNPJs formatados (XX.XXX.XXX/XXXX-XX) ou sequências de 14 dígitos
+        cnpjs_encontrados = re.findall(r'\b\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}\b', texto or "")
+        cnpjs_limpos = {re.sub(r'\D', '', c) for c in cnpjs_encontrados}
+        
+        # Também busca na massa de dígitos limpos (pode haver falsos positivos, mas é bom como backup)
+        puj_14 = re.findall(r'\d{14}', texto_limpo)
+        for c in puj_14: cnpjs_limpos.add(c)
+
+        # CNPJ do Emitter (Credos/Servsolda) - Sempre ignoramos como alvo
+        cnpj_proprio = "54804458000122"
+        
+        # Se existe um CNPJ que não é o nosso e NÃO é o do cliente, temos um CONFLITO
+        for c in cnpjs_limpos:
+            if c != cnpj_proprio:
+                if cnpj_alvo_limpo and c != cnpj_alvo_limpo:
+                    meta['conflito_identidade'] = True
+                elif not cnpj_alvo_limpo:
+                    # Se não temos o CNPJ do cliente no banco, qualquer CNPJ estranho é um risco
+                    # mas não podemos cravar conflito sem saber se é o dele.
+                    pass
 
         nome_curto = " ".join(nome_alvo.upper().split()[:2]) if nome_alvo else ""
+        primeiro_nome = nome_alvo.upper().split()[0] if nome_alvo else ""
 
-        # 1. Identidade Forte (CNPJ)
-        if cnpj_limpo and len(cnpj_limpo) > 5 and (cnpj_limpo in texto_limpo or cnpj_limpo in fname_limpo):
+        # 1. Identidade Positiva Forte (CNPJ)
+        if cnpj_alvo_limpo and cnpj_alvo_limpo in cnpjs_limpos:
             meta['pertence_cliente'] = True
         else:
             # Identidade Flexível (Nome)
-            primeiro_nome = nome_alvo.upper().split()[0] if nome_alvo else ""
-            if nome_curto and len(nome_curto) > 3 and (nome_curto in texto_upper or nome_curto in fname_limpo.upper()):
+            if nome_curto and len(nome_curto) > 4 and (nome_curto in texto_upper or nome_curto in fname_limpo.upper()):
                 meta['pertence_cliente'] = True
-            elif primeiro_nome and len(primeiro_nome) >= 3 and (primeiro_nome in texto_upper or primeiro_nome in fname_limpo.upper()):
+            elif primeiro_nome and len(primeiro_nome) >= 4 and (primeiro_nome in texto_upper or primeiro_nome in fname_limpo.upper()):
                 meta['pertence_cliente'] = True
 
         # 2. Número da NF (Sniper de Precisão)
@@ -150,17 +170,12 @@ class MailScanner:
                 if any(n == nf_search for n in nfs_reais_na_chave):
                     meta['tem_nf'] = True
                 else:
-                    # Se achou uma chave de acesso e o número NÃO é o nosso, é um conflito fatal
                     meta['outra_nf_detectada'] = nfs_reais_na_chave[0]
             
-                # BUSCA DE CONFLITO EM NÚMEROS SOLTOS: 
-                # Procura outros números de 4 dígitos (comum em NFs dessa empresa)
-                outras_nfs = re.findall(r'\b\d{3,5}\b', texto + " " + fname_limpo)
-                outras_nfs = [n.lstrip('0') for n in outras_nfs if n.lstrip('0') != nf_search and len(n.lstrip('0')) >= 3 and n not in ["2024", "2025", "2026", "2027"]]
-                if outras_nfs and not meta['tem_nf']:
-                    meta['outra_nf_detectada'] = outras_nfs[0]
-                else:
-                    meta['outra_nf_detectada'] = None
+            # Busca de número solto (Apenas se não tem chave conflitante)
+            if not meta['tem_nf'] and not meta.get('outra_nf_detectada'):
+                if re.search(rf'(?<!\d){nf_search}(?!\d)', texto_limpo + " " + fname_limpo):
+                    meta['tem_nf'] = True
 
         # 2.5 Reforço para Boletos
         boleto_words = ['boleto', 'duplicata', 'titulo', 'fatura', 'pagamento']
@@ -169,7 +184,6 @@ class MailScanner:
 
         # 3. Extração de Valores e Vencimento
         if texto:
-            # Captura valores tipo 1.234,56 ou 1234,56 ou 12,34
             valores_str = re.findall(r'\b\d{1,3}(?:\.\d{3})*,\d{2}\b', texto)
             for v_str in valores_str:
                 try:
@@ -333,25 +347,23 @@ class MailScanner:
                         if nf_na_chave == nf_num:
                             eh_nf_confirmada = True
 
-                nome_sem_chave = re.sub(r'\d{44}', '', nome_orig)
-                # O número da NF precisa ser uma entidade isolada, não parte de um número maior (ex: 51237 != 1237)
-                if not eh_nf_confirmada and re.search(rf'(?<!\d){nf_num}(?!\d)', nome_sem_chave):
-                    eh_nf_confirmada = True
-                
-                if not eh_nf_confirmada and m.get('score', 0) >= 30: # Score Alto = NF Interna
-                    eh_nf_confirmada = True
-
-                # CROSS-CONTAMINATION FILTER: Ensures we don't grab a different client's file just because the NFe matches!
+                # CROSS-CONTAMINATION FILTER (REFORÇADO)
                 if eh_nf_confirmada:
-                    identidade_batendo = False
-                    if m.get('pertence_cliente', False): identidade_batendo = True
-                    if m.get('tem_vencimento', False): identidade_batendo = True
-                    if alvos_validos and m.get('valores') and any((abs(v - a) < 1.0) for v in m.get('valores') for a in alvos_validos):
-                        identidade_batendo = True
-                        
-                    if not identidade_batendo and not m.get('eh_imagem', False):
+                    identidade_ok = False
+                    # Regra 1: CNPJ ou Nome batendo é aprovação instantânea
+                    if m.get('pertence_cliente', False): 
+                        identidade_ok = True
+                    
+                    # Regra 2: Valor ou Vencimento batendo SÓ VALE se não houver conflito de outro CNPJ
+                    if not identidade_ok and not m.get('conflito_identidade', False):
+                        if m.get('tem_vencimento', False): identidade_ok = True
+                        if alvos_validos and m.get('valores') and any((abs(v - a) < 0.1) for v in m.get('valores') for a in alvos_validos):
+                            identidade_ok = True
+                    
+                    if not identidade_ok:
                         eh_nf_confirmada = False
-                        print(f"   ⚠️ REJEITADO POR SEGURANÇA: Número {nf_num} bate, mas nome/CNPJ/valor NÃO batem! (Contaminação de cliente evitada): {bname[:50]}")
+                        msg_falha = "Conflito de CNPJ" if m.get('conflito_identidade') else "Nome/Dados não conferem"
+                        print(f"   ⚠️ REJEITADO: {msg_falha} | {bname[:50]}")
 
                 if eh_nf_confirmada:
                     arquivos_aprovados.add(m['fpath'])
