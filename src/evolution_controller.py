@@ -21,6 +21,7 @@ class EvolutionController:
         # Dinamismo para Multi-tenant: Limpeza rigorosa para bater com o padro de criao (CNPJ numrico)
         inst_raw = nome_empresa_cliente or os.getenv('INSTANCE_NAME') or "Credos_SaaS"
         self.instance = str(inst_raw).strip().replace(".", "").replace("-", "").replace("/", "").replace(" ", "").lower()
+        self.jid_cache = {} # Cache para evitar chamadas excessivas ao checkNumber
         
         # Log da configurao inicial para diagnstico
         if not os.path.exists('/.dockerenv') or True: # Logar sempre no incio do debug
@@ -151,23 +152,62 @@ class EvolutionController:
             self.debug_log(f"Erro ao buscar contato {jid}", "", e)
             return None
 
+    def buscar_jid_valido(self, numero):
+        """
+        Resolve o problema do 9º dígito no Brasil.
+        Consulta a Evolution API para descobrir o JID real (se existe com ou sem o 9).
+        """
+        # Limpa o número
+        num_clean = "".join(filter(str.isdigit, str(numero)))
+        if not num_clean: return None
+        if len(num_clean) <= 11: num_clean = "55" + num_clean
+        
+        # JID padrão (com o número como enviado)
+        jid_default = num_clean if "@" in num_clean else f"{num_clean}@s.whatsapp.net"
+        
+        # Se for brasileiro, tentamos validar
+        if num_clean.startswith("55"):
+            if num_clean in self.jid_cache:
+                return self.jid_cache[num_clean]
+            
+            try:
+                # Auto-correio URL para Docker
+                url_exec = self.url.replace('localhost', 'evolution_api') if 'localhost' in self.url and os.path.exists('/.dockerenv') else self.url
+                endpoint = f"{url_exec}/chat/checkNumber/{self.instance}"
+                
+                # Para números brasileiros, mandamos o número com e sem o 9 (se tiver 13 dígitos)
+                test_numbers = [num_clean]
+                if len(num_clean) == 13: # 55 + DDD + 9 + 8 dígitos
+                    sem_9 = num_clean[:4] + num_clean[5:] # Remove o 5º dígito (o 9)
+                    test_numbers.append(sem_9)
+                
+                payload = {"numbers": test_numbers}
+                r = requests.post(endpoint, json=payload, headers=self.headers, timeout=15)
+                
+                if r.status_code == 200:
+                    results = r.json()
+                    for res in results:
+                        if res.get("exists") and res.get("jid"):
+                            valid_jid = res.get("jid")
+                            self.jid_cache[num_clean] = valid_jid
+                            return valid_jid
+                else:
+                    self.debug_log("FALHA CHECK NUMBER", endpoint, r, payload)
+            except Exception as e:
+                print(f"Erro ao validar número BR: {e}")
+        
+        return jid_default
+
     def enviar_mensagem_texto(self, numero, mensagem):
         try:
             if not self.url or not self.apikey: return False
             
-            # Auto-correo URL
             if 'localhost' in self.url and os.path.exists('/.dockerenv'):
                 self.url = self.url.replace('localhost', 'evolution_api')
 
-            # Se o nmero j vier com @ (ex: @lid ou @s.whatsapp.net), use como JID direto
-            if "@" in str(numero):
-                target = str(numero)
-            else:
-                target = "".join(filter(str.isdigit, str(numero)))
-                if not target: return False
-                if len(target) <= 11: target = "55" + target
-                if "@s.whatsapp.net" not in target and "@" not in target:
-                    target += "@s.whatsapp.net"
+            # Resolve JID (Lógica do 9º dígito inclusa)
+            target = self.buscar_jid_valido(numero)
+            if not target: return False
             
             endpoint = f"{self.url}/message/sendText/{self.instance}"
             payload = {
@@ -218,14 +258,9 @@ class EvolutionController:
         try:
             if not self.url or not self.apikey: return False
             
-            # Se o nmero j vier com @ (ex: @lid ou @s.whatsapp.net), use como JID direto
-            if "@" in str(numero):
-                target = str(numero)
-            else:
-                target = "".join(filter(str.isdigit, str(numero)))
-                if not target: return False
-                if len(target) <= 11: target = "55" + target
-                if "@" not in target: target += "@s.whatsapp.net"
+            # Resolve JID (Lógica do 9º dígito inclusa)
+            target = self.buscar_jid_valido(numero)
+            if not target: return False
             
             endpoint = f"{self.url}/message/sendMedia/{self.instance}"
             mediatype = "document"

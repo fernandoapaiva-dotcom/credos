@@ -104,3 +104,6 @@
 --- [INIT] Instncia: 54804458000122 | URL: http://localhost:8080 ---
 [54804458000122] MENSAGEM ENVIADA para 5561998334833@s.whatsapp.net: TESTE CREDOS - Analu Inteligente
 Notas Isoladas do...
+--- [INIT] Instncia: 54804458000122 | URL: http://localhost:8080 ---
+--- [INIT] Instncia: 54804458000122 | URL: http://localhost:8080 ---
+[54804458000122] Resposta 200: {"instance":{"instanceName":"54804458000122","state":"open"}}

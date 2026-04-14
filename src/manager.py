@@ -610,18 +610,18 @@ class Manager:
         pdf.cell(0, 6, str(empresa_nome).upper(), 0, 1, 'C')
         
         titulos_map = {
-            "Cobrados": "TTULOS COBRADOS (OPERADOR & ANALU)",
-            "Baixados": "RELATRIO DE TTULOS BAIXADOS / PAGOS",
-            "Cancelados": "RELATRIO DE TTULOS CANCELADOS",
-            "Excluidos": "HISTRICO DE EXCLUSES NO CRM",
-            "Solicitado_Cartorio": "TTULOS SOLICITADOS PARA CARTRIO (OPERADOR)",
-            "Enviado_Cartorio": "TTULOS ENVIADOS PARA CARTRIO (ANALU IA)"
+            "Cobrados": "TÍTULOS COBRADOS (OPERADOR & ANALU)",
+            "Baixados": "RELATÓRIO DE TÍTULOS BAIXADOS / PAGOS",
+            "Cancelados": "RELATÓRIO DE TÍTULOS CANCELADOS",
+            "Excluidos": "HISTÓRICO DE EXCLUSÕES NO CRM",
+            "Solicitado_Cartorio": "TÍTULOS SOLICITADOS PARA CARTÓRIO (OPERADOR)",
+            "Enviado_Cartorio": "TÍTULOS ENVIADOS PARA CARTÓRIO (ANALU IA)"
         }
         pdf.set_font("Arial", 'B', 11)
-        pdf.cell(0, 6, titulos_map.get(tipo_rel, "RELATRIO DE ATIVIDADES"), 0, 1, 'C')
+        pdf.cell(0, 6, titulos_map.get(tipo_rel, "RELATÓRIO DE ATIVIDADES"), 0, 1, 'C')
         
         pdf.set_font("Arial", '', 8)
-        pdf.cell(0, 5, f"Perodo: {data_inicio or 'Incio'} at {data_fim or 'Hoje'} | Emisso: {datetime.now().strftime('%d/%m/%Y %H:%M')}", 0, 1, 'R')
+        pdf.cell(0, 5, f"Período: {data_inicio or 'Início'} até {data_fim or 'Hoje'} | Emissão: {datetime.now().strftime('%d/%m/%Y %H:%M')}", 0, 1, 'R')
         pdf.ln(5)
 
         if df.empty:
@@ -631,11 +631,11 @@ class Manager:
         else:
             # Seleo de Colunas
             if tipo_rel == "Cobrados":
-                cols = [("Data/Hora", 35), ("Cliente", 65), ("Canal", 25), ("Status", 25), ("Usurio", 30), ("Detalhes", 100)]
+                cols = [("Data/Hora", 35), ("Cliente", 65), ("Canal", 25), ("Status", 25), ("USUÁRIO", 30), ("OCORRÊNCIA", 100)]
             elif tipo_rel in ("Baixados", "Cancelados", "Solicitado_Cartorio", "Enviado_Cartorio"):
                 cols = [("Data/Hora", 40), ("Cliente", 90), ("NF", 30), ("Valor", 40), ("Complemento", 80)]
-            else: # Excluidos
-                cols = [("Data/Hora", 40), ("Cliente", 90), ("Usurio", 40), ("Ocorrncia", 110)]
+            else: # Excluidos / Todos
+                cols = [("Data/Hora", 40), ("Cliente", 90), ("USUÁRIO", 40), ("OCORRÊNCIA", 110)]
 
             # Cabealho da Tabela
             pdf.set_fill_color(30, 80, 160)
@@ -670,11 +670,12 @@ class Manager:
                     extra = str(r.get('usuario', '') or r.get('status', ''))
                     pdf.cell(cols[4][1], 6, extra[:60], 1, 0, 'L', fill=fill)
 
-                else: # Excluidos
+                else: # Excluidos / Todos
                     pdf.cell(cols[0][1], 6, h_data, 1, 0, 'C', fill=fill)
                     pdf.cell(cols[1][1], 6, str(r.get('pagador', ''))[:60], 1, 0, 'L', fill=fill)
                     pdf.cell(cols[2][1], 6, str(r.get('usuario', '') or 'Operador'), 1, 0, 'C', fill=fill)
-                    pdf.cell(cols[3][1], 6, str(r.get('obs', ''))[:80], 1, 0, 'L', fill=fill)
+                    det = self._humanizar_detalhes(str(r.get('obs', ''))).replace('\n', ' ')
+                    pdf.cell(cols[3][1], 6, det[:105], 1, 0, 'L', fill=fill)
 
                 pdf.ln()
                 fill = not fill
