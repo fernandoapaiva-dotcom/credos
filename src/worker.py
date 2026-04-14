@@ -131,7 +131,8 @@ def disparar_cobranca_automatica(forcar_execucao=False, cnpj_filtro=None, canais
                     # 4. Executa Envio
                     res = mgr.executar_processo_completo_cobranca(
                         cliente_nome, msg, zip_path, info['itens'], arquivos_temp,
-                        canais_selecionados=canais_selecionados
+                        canais_selecionados=canais_selecionados,
+                        cli_direct=info['dados_cliente']
                     )
                     
                     status = "SUCESSO" if (res['email'] or res['whatsapp']) else "FALHA"

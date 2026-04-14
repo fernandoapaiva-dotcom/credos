@@ -297,14 +297,21 @@ class Manager:
         
         return zip_name, arquivos_temp
 
-    def executar_processo_completo_cobranca(self, cliente_nome, msg, zip_path, itens, arquivos_temp, canais_selecionados=None):
+    def executar_processo_completo_cobranca(self, cliente_nome, msg, zip_path, itens, arquivos_temp, canais_selecionados=None, cli_direct=None):
         if canais_selecionados is None: canais_selecionados = ["whatsapp", "email"]
         res_wa = False
         res_email = False
+        res_err = ""
         
-        cli_dados = listar_clientes_db(self.cnpj_empresa, nome_filtro=cliente_nome)
-        if not cli_dados: return {"whatsapp": False, "email": False}
-        cli = cli_dados[0]
+        # 0. Busca dados do cliente (Prioriza objeto direto se enviado pelo worker)
+        if cli_direct:
+            cli = cli_direct
+        else:
+            cli_dados = listar_clientes_db(self.cnpj_empresa, nome_filtro=cliente_nome)
+            if not cli_dados: 
+                print(f" [ERR] Cliente no encontrado: {cliente_nome}")
+                return {"whatsapp": False, "email": False}
+            cli = cli_dados[0]
         
         # FAIL-SAFE: Re-verifica no BANCO se os ttulos ainda esto para 'Cobrar'
         # Isso evita Race Conditions se o usurio baixar o ttulo enquanto o rob est rodando
@@ -459,7 +466,6 @@ class Manager:
             pagador = row[1]
             if pagador not in agrupados:
                 agrupados[pagador] = []
-            
             tit = {
                 'id': row[0],
                 'pagador': row[1],
@@ -627,7 +633,7 @@ class Manager:
         if df.empty:
             pdf.ln(20)
             pdf.set_font("Arial", 'B', 12)
-            pdf.cell(0, 10, "Nenhum registro encontrado para este relatrio.", 0, 1, 'C')
+            pdf.cell(0, 10, "Nenhum registro encontrado para este relatório.", 0, 1, 'C')
         else:
             # Seleo de Colunas
             if tipo_rel == "Cobrados":

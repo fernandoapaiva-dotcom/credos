@@ -173,7 +173,7 @@ class EvolutionController:
             try:
                 # Auto-correio URL para Docker
                 url_exec = self.url.replace('localhost', 'evolution_api') if 'localhost' in self.url and os.path.exists('/.dockerenv') else self.url
-                endpoint = f"{url_exec}/chat/checkNumber/{self.instance}"
+                endpoint = f"{url_exec}/number/checkNumber/{self.instance}"
                 
                 # Para números brasileiros, mandamos o número com e sem o 9 (se tiver 13 dígitos)
                 test_numbers = [num_clean]
@@ -184,15 +184,18 @@ class EvolutionController:
                 payload = {"numbers": test_numbers}
                 r = requests.post(endpoint, json=payload, headers=self.headers, timeout=15)
                 
+                # Log do checkNumber para diagnóstico de campo
+                self.debug_log("CHECK NUMBER", endpoint, r, payload)
+                
                 if r.status_code == 200:
                     results = r.json()
+                    # A Evolution retorna uma lista de objetos na v1
                     for res in results:
-                        if res.get("exists") and res.get("jid"):
+                        if (res.get("exists") or res.get("status") == "exists") and res.get("jid"):
                             valid_jid = res.get("jid")
                             self.jid_cache[num_clean] = valid_jid
                             return valid_jid
-                else:
-                    self.debug_log("FALHA CHECK NUMBER", endpoint, r, payload)
+                # Se não existir ou falhar, retorna o jid_default (melhor tentar do que abortar)
             except Exception as e:
                 print(f"Erro ao validar número BR: {e}")
         
@@ -212,14 +215,21 @@ class EvolutionController:
             endpoint = f"{self.url}/message/sendText/{self.instance}"
             payload = {
                 "number": target,
-                "text": mensagem,
-                "delay": 1200,
-                "linkPreview": False
+                "textMessage": {
+                    "text": mensagem
+                }
             }
+            
             r = requests.post(endpoint, json=payload, headers=self.headers, timeout=20)
             
             if r.status_code not in [200, 201]:
-                self.debug_log("FALHA ENVIO TEXTO", endpoint, r, payload)
+                self.debug_log("FALHA ENVIO TEXTO (V1)", endpoint, r, payload)
+                # Fallback: se o wrapper falhar, tenta o formato flat (alguns forks da v1 usam flat)
+                if r.status_code == 400:
+                    payload_flat = {"number": target, "text": mensagem}
+                    r = requests.post(endpoint, json=payload_flat, headers=self.headers, timeout=20)
+                    if r.status_code in [200, 201]: return True
+
                 return False
             
             # Log de sucesso para debug
@@ -270,14 +280,22 @@ class EvolutionController:
             
             payload = {
                 "number": target,
-                "mediatype": mediatype,
-                "media": b64,
-                "fileName": filename,
-                "caption": filename
+                "mediaMessage": {
+                    "mediatype": mediatype,
+                    "media": b64,
+                    "fileName": filename,
+                    "caption": filename
+                }
             }
             r = requests.post(endpoint, json=payload, headers=self.headers)
+            
             if r.status_code not in [200, 201]:
-                self.debug_log("FALHA ENVIO MDIA B64", endpoint, r, payload)
+                self.debug_log("FALHA ENVIO MÍDIA (V1)", endpoint, r, payload)
+                # Fallback flat
+                if r.status_code == 400:
+                    payload_flat = {"number": target, "mediatype": mediatype, "media": b64, "fileName": filename, "caption": filename}
+                    r = requests.post(endpoint, json=payload_flat, headers=self.headers)
+                    if r.status_code in [200, 201]: return True
                 return False
             return True
         except Exception as e:
