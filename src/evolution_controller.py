@@ -173,13 +173,12 @@ class EvolutionController:
             try:
                 # Auto-correio URL para Docker
                 url_exec = self.url.replace('localhost', 'evolution_api') if 'localhost' in self.url and os.path.exists('/.dockerenv') else self.url
-                endpoint = f"{url_exec}/number/checkNumber/{self.instance}"
+                endpoint = f"{url_exec}/chat/whatsappNumber/{self.instance}"
                 
-                # Para números brasileiros, mandamos o número com e sem o 9 (se tiver 13 dígitos)
+                # Para números brasileiros, mandamos o número para verificação
                 test_numbers = [num_clean]
-                if len(num_clean) == 13: # 55 + DDD + 9 + 8 dígitos
-                    sem_9 = num_clean[:4] + num_clean[5:] # Remove o 5º dígito (o 9)
-                    test_numbers.append(sem_9)
+                # Se for 13 dígitos (com o 9), também tentamos o 12 (sem o 9) se o primeiro falhar internamente
+                # mas o whatsappNumber geralmente resolve isso sozinho se mandarmos o de 13.
                 
                 payload = {"numbers": test_numbers}
                 r = requests.post(endpoint, json=payload, headers=self.headers, timeout=15)
