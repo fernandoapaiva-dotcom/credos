@@ -49,7 +49,7 @@ class FiscalRepository:
         db_path = os.path.join(self.db_dir, f"db_{cnpj_empresa}.db")
         if not os.path.exists(db_path): return
         
-        conn = sqlite3.connect(db_path)
+        conn = sqlite3.connect(db_path, timeout=30)
         c = conn.cursor()
         try:
             # Procura se o arquivo já tá registrado pelo rel_path ou filename similar
