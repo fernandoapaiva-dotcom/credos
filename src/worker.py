@@ -155,7 +155,6 @@ def disparar_cobranca_automatica(forcar_execucao=False, cnpj_filtro=None, canais
             print(error_msg)
             # ANALU SENTINELA COMPENSATÓRIA: Se der erro crítico (ex: Evolution Down), tenta avisar o Operador via Plano B (Email)
             try:
-                from src.manager import Manager
                 temp_mgr = Manager(cnpj_empresa)
                 aviso_sentinela = (
                     f"⚠️ ALERTA DE SISTEMA (ANALU SENTINELA)\n\n"
