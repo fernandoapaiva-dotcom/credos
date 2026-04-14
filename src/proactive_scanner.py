@@ -140,7 +140,8 @@ class ProactiveScanner:
                             "Desconhecido",
                             tipo,
                             nf_num,
-                            tmp_path
+                            tmp_path,
+                            atualizar_db=False
                         )
 
                         if repo_path:

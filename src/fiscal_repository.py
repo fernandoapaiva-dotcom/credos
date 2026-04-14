@@ -11,7 +11,7 @@ class FiscalRepository:
     def _limpar_nome(self, nome):
         return "".join([c for c in nome if c.isalnum() or c in (' ', '_', '-')]).strip()
 
-    def organizar_arquivo(self, cnpj_empresa, cnpj_cliente, nome_cliente, tipo_doc, num_nf, fpath_origem):
+    def organizar_arquivo(self, cnpj_empresa, cnpj_cliente, nome_cliente, tipo_doc, num_nf, fpath_origem, atualizar_db=True):
         """Move o arquivo para a hierarquia estruturada e atualiza o banco"""
         if not os.path.exists(fpath_origem): return None
         
@@ -40,8 +40,9 @@ class FiscalRepository:
         
         rel_path = os.path.join(rel_dir, filename).replace("\\", "/")
         
-        # Atualiza o banco
-        self._atualizar_banco(cnpj_empresa, cnpj_cli_limpo, nf_str, tipo_doc, rel_path, nome_cliente)
+        # Atualiza o banco, se solicitado
+        if atualizar_db:
+            self._atualizar_banco(cnpj_empresa, cnpj_cli_limpo, nf_str, tipo_doc, rel_path, nome_cliente)
         
         return dest_path
 
