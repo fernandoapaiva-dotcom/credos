@@ -739,10 +739,11 @@ export const CRM: React.FC = () => {
                         <div className="flex flex-wrap items-center gap-3 w-full xl:w-auto flex-shrink-0">
                           <button
                             onClick={() => handleViewDocuments(t)}
-                            className="flex-1 md:flex-none p-3 rounded-xl bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-600 hover:text-white transition-all shadow-sm"
+                            className="flex-1 md:flex-none px-4 py-3 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700 transition-all shadow-md flex items-center gap-2 group"
                             title="Ver NFe / NFS / Boleto"
                           >
-                            <Eye size={20} />
+                            <Eye size={18} className="group-hover:scale-110 transition-transform" />
+                            <span className="text-xs font-black uppercase">Documentos</span>
                           </button>
                           <button 
                             onClick={() => handleChargeTitle(t.id)}

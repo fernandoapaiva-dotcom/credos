@@ -66,13 +66,13 @@ class ProactiveScanner:
         finally:
             mail.logout()
 
-    def indexar_novos_emails(self, cnpj, scanner, mail):
-        """Busca os e-mails da última hora e indexa anexos no banco."""
-        # Busca faturas de HOJE para indexação proativa
-        hoje = datetime.now().strftime("%d-%b-%Y")
+    def indexar_novos_emails(self, cnpj, scanner, mail, since_date=None):
+        """Busca os e-mails e indexa anexos no banco. Default: Hoje."""
+        if since_date is None:
+            since_date = datetime.now().strftime("%d-%b-%Y")
         
         # 1. Busca Notas Fiscais e Boletos por padrões de assunto comuns
-        status, data = mail.search(None, f'SINCE "{hoje}"')
+        status, data = mail.search(None, f'SINCE "{since_date}"')
         if status != "OK" or not data[0]: return
 
         ids = data[0].split()
@@ -178,7 +178,7 @@ class ProactiveScanner:
             
             status, data = mail.search(None, f'SINCE "{inicio}"')
             if status == "OK" and data[0]:
-                self.indexar_novos_emails(cnpj, scanner, mail)
+                self.indexar_novos_emails(cnpj, scanner, mail, since_date=inicio)
                 return True
             return False
         finally:
