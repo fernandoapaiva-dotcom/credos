@@ -22,29 +22,29 @@ print("--- INICIANDO TESTE NA NOTA DO DAUTO DEV (SEM MODIFICAR DADOS OFICIAIS) -
 
 mgr = Manager(cnpj)
 
-conn = conectar(cnpj)
-conn.row_factory = lambda c, r: dict(zip([col[0] for col in c.description], r))
-titulos = conn.cursor().execute("SELECT * FROM titulos WHERE pagador LIKE '%DAUTO%' AND status='Aberto'").fetchall()
-conn.close()
+# Força o título para realizar o teste de scan de e-mail e envio
+tit_parsed = [{
+    'pagador': nome,
+    'numero_nf': '382',
+    'status': 'Aberto',
+    'cnpj': '24934648000284' # CNPJ correto do Dauto
+}]
 
-if not titulos:
-    print("Nenhum titulo em aberto do Dauto para testar!")
-    sys.exit(1)
+# DEBUG: Mostrar o que está acontecendo no scanner
+import src.mail_scanner
+src.mail_scanner.DEBUG_SCANNER = True 
 
-tit_parsed = []
-for t in titulos:
-    tit_parsed.append(t)
 
-print(f"Buscando as notas usando FILTRO FORTE DE CONTAMINAÇÃO para {len(titulos)} titulos em aberto...")
+print(f"Buscando as notas usando FILTRO FORTE DE CONTAMINAÇÃO para {len(tit_parsed)} titulos em aberto...")
 
 zip_path, arquivos_temp = mgr.buscar_e_zipar_documentos(nome, tit_parsed)
 
-print(f"📦 Zip File: {zip_path}")
-print(f"📄 Arquivos Temporários Aprovados: {arquivos_temp}")
+print(f"Zip File: {zip_path}")
+print(f"Arquivos Temporarios Aprovados: {arquivos_temp}")
 
 if zip_path and os.path.exists(zip_path):
-    print(f"🚀 Enviando resultado para {numero_teste} via Whatsapp...")
-    msg = f"TESTE CREDOS - Analu Inteligente\nNotas Isoladas do Cliente: {nome}\nConfira se só trouxe a NF verdadeira!"
+    print(f"Enviando resultado para {numero_teste} via Whatsapp...")
+    msg = f"TESTE CREDOS - Analu Inteligente\nNotas Isoladas do Cliente: {nome}\nConfira se so trouxe a NF verdadeira!"
     
     mgr.evo.enviar_mensagem_texto(numero_teste, msg)
     import time
@@ -52,8 +52,8 @@ if zip_path and os.path.exists(zip_path):
     res = mgr.evo.enviar_midia(numero_teste, zip_path)
     
     if res:
-        print("✅ TESTE ENVIADO CONCLUÍDO NO WHATSAPP")
+        print("CONCLUIDO: TESTE ENVIADO NO WHATSAPP")
     else:
-        print("❌ FALHA AO ENVIAR ARQUIVO PARA WHATSAPP. Arquivo pode ser muito grande ou evolução indisponível.")
+        print("FALHA: AO ENVIAR ARQUIVO PARA WHATSAPP. Arquivo pode ser muito grande ou evolucao indisponivel.")
 else:
-    print("❌ Falha! Scanner não aprovou nenhum documento que batesse a identidade rigidamente.")
+    print("FALHA: Scanner nao aprovou nenhum documento que batesse a identidade rigidamente.")

@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { Layout } from '../components/ui/Layout';
 import { api } from '../context/AuthContext';
-import { Search, Edit2, CheckCircle2, AlertCircle, Clock, Trash2, Loader2, X, Send, FileWarning, Users, ChevronDown, Power, Sparkles, Building2, RefreshCw, FileText } from 'lucide-react';
+import { Search, Edit2, CheckCircle2, AlertCircle, Clock, Trash2, Loader2, X, Send, FileWarning, Users, ChevronDown, Power, Sparkles, Building2, RefreshCw, FileText, FileDown, Eye } from 'lucide-react';
 
 interface Client {
   id: number;
@@ -65,6 +65,12 @@ export const CRM: React.FC = () => {
   const [showAiModal, setShowAiModal] = useState(false);
   const [aiProposal, setAiProposal] = useState({ cliente: '', proposta: '', total: 0 });
   const [sendingProposal, setSendingProposal] = useState(false);
+
+  // Document Viewer State
+  const [showDocsDrawer, setShowDocsDrawer] = useState(false);
+  const [docsTitle, setDocsTitle]= useState<any>(null);
+  const [docsLista, setDocsLista] = useState<any[]>([]);
+  const [loadingDocs, setLoadingDocs] = useState(false);
 
   const companyCnpj = localStorage.getItem('companyCnpj') || '';
 
@@ -244,6 +250,56 @@ export const CRM: React.FC = () => {
       contato: selectedClient.contato
     });
     setIsEditingClient(true);
+  };
+
+  const handleViewDocuments = async (t: Title) => {
+    if (!selectedClient) return;
+    setDocsTitle(t);
+    setShowDocsDrawer(true);
+    setLoadingDocs(true);
+    setDocsLista([]);
+    try {
+      const res = await api.get(`/crm/titles/${encodeURIComponent(t.numero_nf)}/documentos?pagador=${encodeURIComponent(selectedClient.nome)}`);
+      setDocsLista(res.data.documentos || []);
+    } catch(e) {
+      setDocsLista([]);
+    }
+    setLoadingDocs(false);
+  };
+
+  const handleDownloadDoc = (doc: any) => {
+    if (doc.id) {
+      // Documento indexado no banco - busca como base64
+      api.get(`/crm/documentos/${doc.id}/visualizar`).then(res => {
+        const { base64, mimetype, filename } = res.data;
+        const link = document.createElement('a');
+        link.href = `data:${mimetype};base64,${base64}`;
+        link.download = filename;
+        link.click();
+      }).catch(() => alert('Erro ao baixar documento.'));
+    } else if (doc.fpath_temp) {
+      // Arquivo em temp_data
+      api.get(`/crm/documentos/arquivo?fpath=${encodeURIComponent(doc.fpath_temp)}`, { responseType: 'blob' }).then(res => {
+        const url = URL.createObjectURL(res.data);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = doc.filename;
+        link.click();
+        URL.revokeObjectURL(url);
+      }).catch(() => alert('Erro ao baixar arquivo.'));
+    }
+  };
+
+  const handleOpenDocInTab = (doc: any) => {
+    if (doc.id) {
+      api.get(`/crm/documentos/${doc.id}/visualizar`).then(res => {
+        const { base64, mimetype } = res.data;
+        const w = window.open();
+        if (w) {
+          w.document.write(`<iframe src="data:${mimetype};base64,${base64}" width="100%" height="100%" style="border:none"></iframe>`);
+        }
+      }).catch(() => alert('Erro ao abrir documento.'));
+    }
   };
 
   const handleUpdateClient = async (e: React.FormEvent) => {
@@ -681,6 +737,13 @@ export const CRM: React.FC = () => {
                         </div>
                         
                         <div className="flex flex-wrap items-center gap-3 w-full xl:w-auto flex-shrink-0">
+                          <button
+                            onClick={() => handleViewDocuments(t)}
+                            className="flex-1 md:flex-none p-3 rounded-xl bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-600 hover:text-white transition-all shadow-sm"
+                            title="Ver NFe / NFS / Boleto"
+                          >
+                            <Eye size={20} />
+                          </button>
                           <button 
                             onClick={() => handleChargeTitle(t.id)}
                             disabled={actionLoading}
@@ -1116,6 +1179,81 @@ export const CRM: React.FC = () => {
                 {sendingProposal ? <Loader2 size={18} className="animate-spin mr-2"/> : <Send size={18} className="mr-2"/>}
                 Confirmar e Enviar via WhatsApp
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DRAWER DE DOCUMENTOS (NFe / NFS / Boleto) */}
+      {showDocsDrawer && (
+        <div className="fixed inset-0 z-50 flex justify-end" onClick={() => setShowDocsDrawer(false)}>
+          <div
+            className="w-full max-w-md h-full bg-white dark:bg-dark-surface shadow-2xl flex flex-col animate-in slide-in-from-right duration-300"
+            onClick={e => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="p-6 border-b border-slate-100 dark:border-dark-border flex justify-between items-start bg-indigo-50 dark:bg-indigo-900/10">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-widest text-indigo-400 mb-1">Documentos Fiscais</p>
+                <h3 className="text-lg font-black text-indigo-800 dark:text-indigo-300">NF {docsTitle?.numero_nf}</h3>
+                <p className="text-xs text-slate-500 mt-1">Venc. {docsTitle?.vencimento} · R$ {(docsTitle?.valor || 0).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
+              </div>
+              <button onClick={() => setShowDocsDrawer(false)} className="p-2 rounded-xl bg-white dark:bg-dark-bg text-slate-400 hover:text-slate-700 transition-colors shadow-sm">
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="flex-1 overflow-y-auto p-6 space-y-3">
+              {loadingDocs ? (
+                <div className="flex flex-col items-center justify-center py-20 text-slate-400">
+                  <Loader2 size={36} className="animate-spin mb-3 text-indigo-500" />
+                  <p className="text-sm">Buscando documentos...</p>
+                </div>
+              ) : docsLista.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-20 text-slate-400">
+                  <FileWarning size={48} className="mb-3 opacity-20" />
+                  <p className="font-medium text-sm">Nenhum documento encontrado</p>
+                  <p className="text-xs mt-1 text-center max-w-[220px]">A Analu ainda não indexou arquivos para esta NF. Eles são capturados automaticamente dos e-mails.</p>
+                </div>
+              ) : (
+                docsLista.map((doc, i) => (
+                  <div key={i} className="flex items-center gap-4 p-4 rounded-2xl border border-slate-200 dark:border-dark-border bg-slate-50 dark:bg-dark-bg hover:border-indigo-300 transition-all group">
+                    <div className={`w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 font-black text-xs uppercase ${doc.ext === '.pdf' ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}`}>
+                      {doc.ext === '.pdf' ? 'PDF' : 'XML'}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-bold text-slate-800 dark:text-slate-200 text-sm truncate">{doc.filename}</p>
+                      <p className="text-[10px] text-slate-400 uppercase font-bold mt-0.5">{doc.tipo || 'Documento'} · {doc.created_at ? new Date(doc.created_at).toLocaleDateString('pt-BR') : '—'}</p>
+                    </div>
+                    <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                      {doc.ext === '.pdf' && doc.id && (
+                        <button
+                          onClick={() => handleOpenDocInTab(doc)}
+                          className="p-2 rounded-lg bg-indigo-100 text-indigo-600 hover:bg-indigo-600 hover:text-white transition-all"
+                          title="Abrir PDF"
+                        >
+                          <Eye size={16} />
+                        </button>
+                      )}
+                      <button
+                        onClick={() => handleDownloadDoc(doc)}
+                        className="p-2 rounded-lg bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-indigo-600 hover:text-white transition-all"
+                        title="Baixar"
+                      >
+                        <FileDown size={16} />
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="p-4 border-t border-slate-100 dark:border-dark-border bg-slate-50 dark:bg-dark-bg/30">
+              <p className="text-[10px] text-slate-400 text-center">
+                Documentos capturados automaticamente pela Analu a partir dos e-mails enviados.
+              </p>
             </div>
           </div>
         </div>

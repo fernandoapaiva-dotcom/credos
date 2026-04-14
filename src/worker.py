@@ -18,7 +18,7 @@ def safe_print(*args, **kwargs):
         _original_print(*safe_args, **kwargs)
 builtins.print = safe_print
 
-def disparar_cobranca_automatica(forcar_execucao=False, cnpj_filtro=None):
+def disparar_cobranca_automatica(forcar_execucao=False, cnpj_filtro=None, canais_selecionados=None):
     """
     Motor de Cobrança:
     1. Varre agendamentos ativos.
@@ -80,14 +80,28 @@ def disparar_cobranca_automatica(forcar_execucao=False, cnpj_filtro=None):
                 continue
                 
             pular_feriados = ag.get('pular_feriados', 1)
-            if pular_feriados == 1 and datetime.now().date() in holidays.BR():
-                print(f"⏩ Pulando {cnpj_empresa}: Hoje é feriado nacional e a configuração manda pular.")
-                continue
-                
             horario_esperado = ag.get('horario_envio', '09:00')
-            if hora_atual != horario_esperado:
-                print(f"⏳ Pulando {cnpj_empresa}: Horário previsto é {horario_esperado}, agora são {hora_atual}.")
-                continue
+            try:
+                # Compara se estamos na janela de 15 min após o horário previsto
+                # E se já não executamos hoje
+                agora_dt = datetime.now()
+                hora_esp_dt = datetime.strptime(horario_esperado, "%H:%M").replace(year=agora_dt.year, month=agora_dt.month, day=agora_dt.day)
+                
+                # Janela de 15 minutos (900 segundos)
+                atraso_segundos = (agora_dt - hora_esp_dt).total_seconds()
+                ja_executou_hoje = ag.get('ultima_execucao', '') == agora_dt.strftime("%Y-%m-%d")
+
+                if ja_executou_hoje:
+                    continue # Já foi feito hoje
+
+                if 0 <= atraso_segundos <= 900:
+                    print(f"✅ Iniciar Cobrança: Horário previsto {horario_esperado}, Janela OK.")
+                else:
+                    # Se planejou para o futuro ou passou muito da janela, pula
+                    continue
+            except:
+                if hora_atual != horario_esperado:
+                    continue
 
         # Inicia o Gerente para esta empresa específica
         try:
@@ -99,6 +113,9 @@ def disparar_cobranca_automatica(forcar_execucao=False, cnpj_filtro=None):
             
             if not fila:
                 print(f"   ✅ Nenhuma pendência 'Cobrar' encontrada.")
+                # Marca como executado para não ficar tentando em loop na janela
+                if not forcar_execucao:
+                    marcar_execucao_hoje(cnpj_empresa)
                 continue
 
             for cliente_nome, info in fila.items():
@@ -113,7 +130,8 @@ def disparar_cobranca_automatica(forcar_execucao=False, cnpj_filtro=None):
                     
                     # 4. Executa Envio
                     res = mgr.executar_processo_completo_cobranca(
-                        cliente_nome, msg, zip_path, info['itens'], arquivos_temp
+                        cliente_nome, msg, zip_path, info['itens'], arquivos_temp,
+                        canais_selecionados=canais_selecionados
                     )
                     
                     status = "SUCESSO" if (res['email'] or res['whatsapp']) else "FALHA"
@@ -128,11 +146,51 @@ def disparar_cobranca_automatica(forcar_execucao=False, cnpj_filtro=None):
                 except Exception as e_cli:
                     print(f"   ❌ Erro no cliente {cliente_nome}: {e_cli}")
 
+            # Marca que o ciclo automático desta empresa foi concluído
+            if not forcar_execucao:
+                marcar_execucao_hoje(cnpj_empresa)
+
         except Exception as e_emp:
-            print(f"❌ Erro crítico ao processar empresa {cnpj_empresa}: {e_emp}")
+            error_msg = f"❌ Erro crítico ao processar empresa {cnpj_empresa}: {e_emp}"
+            print(error_msg)
+            # ANALU SENTINELA COMPENSATÓRIA: Se der erro crítico (ex: Evolution Down), tenta avisar o Operador via Plano B (Email)
+            try:
+                from src.manager import Manager
+                temp_mgr = Manager(cnpj_empresa)
+                aviso_sentinela = (
+                    f"⚠️ ALERTA DE SISTEMA (ANALU SENTINELA)\n\n"
+                    f"Fernando, detectamos uma falha crítica no lote de hoje da empresa {cnpj_empresa}.\n"
+                    f"Erro: {str(e_emp)}\n\n"
+                    f"Por favor, verifique se o WhatsApp está conectado e se o servidor OCI está estável."
+                )
+                # Tenta mandar e-mail de alerta ao administrador
+                config = temp_mgr.config
+                operador_email = config.get('fin_mail_user') # Mandamos para o email de faturamento do Fernando
+                if operador_email:
+                    import smtplib
+                    from email.mime.text import MIMEText
+                    mail = MIMEText(aviso_sentinela)
+                    mail['Subject'] = "⚠️ URGENTE: Analu Sentinela — Falha Técnica Credos"
+                    mail['From'] = config.get('fin_mail_user')
+                    mail['To'] = operador_email
+                    with smtplib.SMTP_SSL(config.get('smtp_server'), 465) as server:
+                        server.login(config.get('fin_mail_user'), config.get('fin_mail_pass'))
+                        server.send_message(mail)
+                    print(f"📢 Analu Sentinela enviou alerta de emergência por e-mail para {operador_email}")
+            except Exception as e_s:
+                print(f"🔥 Falha total na Sentinela: {e_s}")
 
     print(f"🏁 Ciclo Finalizado. Total de envios: {total_envios}")
     return total_envios
+
+def marcar_execucao_hoje(cnpj):
+    """Atualiza o banco para registrar que a cobrança já rodou hoje."""
+    conn = conectar(cnpj)
+    c = conn.cursor()
+    hoje = datetime.now().strftime("%Y-%m-%d")
+    c.execute("UPDATE agendamento SET ultima_execucao = ?", (hoje,))
+    conn.commit()
+    conn.close()
 
 def disparar_negociacoes_ia(cnpj_filtro=None, forcar_hoje=False):
     """

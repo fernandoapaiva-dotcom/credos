@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from api.routers import auth, companies, crm, reports, import_pdf, users, negotiation, cartorio, webhook, evolution_webhook
+from api.routers import auth, companies, crm, reports, import_pdf, users, negotiation, cartorio, webhook, evolution_webhook, proactive
 from contextlib import asynccontextmanager
 import asyncio
 import schedule
@@ -12,6 +12,11 @@ async def run_schedule():
         schedule.run_pending()
         await asyncio.sleep(60)
 
+def run_proactive_worker():
+    from src.proactive_scanner import ProactiveScanner
+    scanner = ProactiveScanner()
+    scanner.start() # Inicia sua própria thread em background
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Roda o worker de cobrança e agendamentos a cada minuto
@@ -22,6 +27,8 @@ async def lifespan(app: FastAPI):
     schedule.every().day.at("21:00").do(resumo_e_execucao_cartorio_noturno)  # Rotina noturna
     schedule.every().day.at("12:00").do(perform_backup)
     task = asyncio.create_task(run_schedule())
+    # Inicia Monitoramento Proativo (E-mails Enviados / SoftSystem)
+    run_proactive_worker()
     yield
     task.cancel()
 
@@ -48,6 +55,7 @@ app.include_router(negotiation.router, prefix="/api/negotiation", tags=["AI Nego
 app.include_router(cartorio.router, prefix="/api/cartorio", tags=["Cartorio Automation"])
 app.include_router(webhook.router, prefix="/api/webhook", tags=["WhatsApp Webhook"])
 app.include_router(evolution_webhook.router, prefix="/api/evolution", tags=["Evolution API Webhook"])
+app.include_router(proactive.router, prefix="/api/proactive", tags=["Proactive Monitoring"])
 
 @app.get("/")
 def read_root():

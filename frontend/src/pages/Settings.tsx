@@ -24,6 +24,10 @@ export const Settings: React.FC = () => {
   const [waStatus, setWaStatus] = useState<string>('desconhecido');
   const [waQrCode, setWaQrCode] = useState<string | null>(null);
 
+  // Tab: Proactive
+  const [proactiveStatus, setProactiveStatus] = useState<any>({ total_documentos: 0 });
+  const [indexingHistory, setIndexingHistory] = useState(false);
+
   // Tab: IA
   const [scheduler, setScheduler] = useState<any>({ dias: [], hora: '09:00', ignorar_feriados: true, ativo: false });
 
@@ -36,6 +40,7 @@ export const Settings: React.FC = () => {
       setCompanyCnpj(cnpj);
       loadConfigs(cnpj);
       loadScheduler(cnpj);
+      loadProactiveStatus(cnpj);
       
       // Auto check WhatsApp status on load
       const checkInitialStatus = async () => {
@@ -70,6 +75,26 @@ export const Settings: React.FC = () => {
          });
       }
     } catch (e) { }
+  };
+
+  const loadProactiveStatus = async (cnpj: string) => {
+    try {
+      const res = await api.get(`/proactive/status/${cnpj}`);
+      setProactiveStatus(res.data);
+    } catch (e) { }
+  };
+
+  const handleIndexHistory = async () => {
+    setIndexingHistory(true);
+    try {
+      await api.post(`/proactive/index-history/${companyCnpj}`);
+      alert("Indexação histórica iniciada em segundo plano! A Analu está varrendo sua Caixa de Saída desde Outubro/2025.");
+      // Recarregar status após um tempo
+      setTimeout(() => loadProactiveStatus(companyCnpj), 5000);
+    } catch (e: any) {
+      alert(e.response?.data?.detail || "Erro ao iniciar indexação.");
+    }
+    setIndexingHistory(false);
   };
 
   const saveConfig = async () => {
@@ -660,9 +685,42 @@ export const Settings: React.FC = () => {
                 Testar Conexão Inteligência Artificial
               </button>
               <button onClick={saveScheduler} disabled={loading} className="btn-primary">
-                {loading ? <Loader2 className="animate-spin mr-2" size={18} /> : <Save size={18} className="mr-2"/>} Salvar Automação e IA
-              </button>
-            </div>
+                 {loading ? <Loader2 className="animate-spin mr-2" size={18} /> : <Save size={18} className="mr-2"/>} Salvar Automação e IA
+               </button>
+             </div>
+
+             <hr className="border-slate-200 dark:border-dark-border my-8" />
+
+             <div className="bg-primary-50 dark:bg-primary-900/10 p-6 rounded-xl border border-primary-200 dark:border-primary-800/50">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h4 className="font-bold text-primary-900 dark:text-primary-300 flex items-center gap-2">
+                       📡 Monitoramento Proativo (SoftSystem / Caixa de Saída)
+                    </h4>
+                    <p className="text-xs text-primary-700 dark:text-primary-400 mt-1">
+                      A Analu captura faturas e boletos enviados pelo seu SoftSystem para garantir consultas instantâneas.
+                    </p>
+                  </div>
+                  <div className="text-center bg-white dark:bg-primary-900/40 px-4 py-2 rounded-lg border border-primary-200 dark:border-primary-800 shadow-sm">
+                     <div className="text-2xl font-black text-primary-600 dark:text-primary-400">{proactiveStatus.total_documentos}</div>
+                     <div className="text-[10px] uppercase tracking-wider font-bold text-slate-400">Faturas Indexadas</div>
+                  </div>
+                </div>
+
+                <div className="flex flex-col sm:flex-row items-center gap-4 mt-6">
+                   <button 
+                     onClick={handleIndexHistory}
+                     disabled={indexingHistory}
+                     className="btn-primary w-full sm:w-auto bg-primary-600 hover:bg-primary-700"
+                   >
+                      {indexingHistory ? <Loader2 className="animate-spin mr-2" size={18}/> : <RefreshCw size={18} className="mr-2"/>}
+                      Indexar Histórico (desde Out/2025)
+                   </button>
+                   <p className="text-[10px] text-slate-500 dark:text-slate-400 italic">
+                      💡 Recomendado rodar uma vez para preencher o repositório com títulos antigos.
+                   </p>
+                </div>
+             </div>
           </div>
         )}
 

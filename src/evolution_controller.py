@@ -18,18 +18,18 @@ class EvolutionController:
             
         self.apikey = key_raw.strip()
         
-        # Dinamismo para Multi-tenant: Limpeza rigorosa para bater com o padrão de criação (CNPJ numérico)
+        # Dinamismo para Multi-tenant: Limpeza rigorosa para bater com o padro de criao (CNPJ numrico)
         inst_raw = nome_empresa_cliente or os.getenv('INSTANCE_NAME') or "Credos_SaaS"
         self.instance = str(inst_raw).strip().replace(".", "").replace("-", "").replace("/", "").replace(" ", "").lower()
         
-        # Log da configuração inicial para diagnóstico
-        if not os.path.exists('/.dockerenv') or True: # Logar sempre no início do debug
+        # Log da configurao inicial para diagnstico
+        if not os.path.exists('/.dockerenv') or True: # Logar sempre no incio do debug
              if os.name == 'nt': log_dir = r"C:\Antigravity\credos"
              else: log_dir = os.path.join(os.getcwd(), "data")
              log_file = os.path.join(log_dir, "EVO_DEBUG.txt")
              if os.path.exists(log_dir):
                  with open(log_file, "a") as f:
-                     f.write(f"--- [INIT] Instância: {self.instance} | URL: {self.url} ---\n")
+                     f.write(f"--- [INIT] Instncia: {self.instance} | URL: {self.url} ---\n")
         
         self.headers = {
             "apikey": self.apikey,
@@ -37,15 +37,15 @@ class EvolutionController:
         }
 
     def debug_log(self, acao, endpoint, resposta, payload=None):
-        print(f"\n--- 🕵️ RASTREIO EVOLUTION ({acao}) ---")
+        print(f"\n---  RASTREIO EVOLUTION ({acao}) ---")
         print(f"URL: {endpoint}")
-        if payload: print(f"Payload Enviado: {payload if 'media' not in str(payload) else 'Mídia (Base64 Omitido)'}")
+        if payload: print(f"Payload Enviado: {payload if 'media' not in str(payload) else 'Mdia (Base64 Omitido)'}")
         print(f"Status Code: {resposta.status_code}")
         print(f"Resposta: {resposta.text}")
         print("-" * 40 + "\n")
 
     def checar_status(self):
-        # Caminho dinâmico para logs (compatível Linux/Windows)
+        # Caminho dinmico para logs (compatvel Linux/Windows)
         if os.name == 'nt':
             log_dir = r"C:\Antigravity\credos"
         else:
@@ -55,7 +55,7 @@ class EvolutionController:
         log_file = os.path.join(log_dir, "EVO_DEBUG.txt")
         
         try:
-            # Auto-correção: se estiver rodando no Docker e usar localhost, muda para 'evolution_api'
+            # Auto-correo: se estiver rodando no Docker e usar localhost, muda para 'evolution_api'
             if 'localhost' in self.url and os.path.exists('/.dockerenv'):
                 self.url = self.url.replace('localhost', 'evolution_api')
                 with open(log_file, "a") as f: f.write(f"[{self.instance}] Auto-corrigindo URL para: {self.url}\n")
@@ -80,7 +80,7 @@ class EvolutionController:
             
             return "error"
         except Exception as e:
-            with open(log_file, "a") as f: f.write(f"[{self.instance}] EXCEÇÃO Status: {str(e)}\n")
+            with open(log_file, "a") as f: f.write(f"[{self.instance}] EXCEO Status: {str(e)}\n")
             return "error"
 
     def criar_instancia(self):
@@ -132,10 +132,10 @@ class EvolutionController:
             return False
 
     def get_contact(self, jid: str):
-        """Busca detalhes de um contato (nome/número) a partir do JID (especialmente para @lid)."""
+        """Busca detalhes de um contato (nome/nmero) a partir do JID (especialmente para @lid)."""
         try:
             import urllib.parse
-            # Em v1.8.2 a resolução de JID exige encoding do caractere @ na URL
+            # Em v1.8.2 a resoluo de JID exige encoding do caractere @ na URL
             jid_encoded = urllib.parse.quote(jid)
             endpoint = f"{self.url}/chat/contact/{self.instance}/{jid_encoded}"
             r = requests.get(endpoint, headers=self.headers, timeout=10)
@@ -155,11 +155,11 @@ class EvolutionController:
         try:
             if not self.url or not self.apikey: return False
             
-            # Auto-correção URL
+            # Auto-correo URL
             if 'localhost' in self.url and os.path.exists('/.dockerenv'):
                 self.url = self.url.replace('localhost', 'evolution_api')
 
-            # Se o número já vier com @ (ex: @lid ou @s.whatsapp.net), use como JID direto
+            # Se o nmero j vier com @ (ex: @lid ou @s.whatsapp.net), use como JID direto
             if "@" in str(numero):
                 target = str(numero)
             else:
@@ -172,9 +172,7 @@ class EvolutionController:
             endpoint = f"{self.url}/message/sendText/{self.instance}"
             payload = {
                 "number": target,
-                "textMessage": {
-                    "text": mensagem
-                },
+                "text": mensagem,
                 "delay": 1200,
                 "linkPreview": False
             }
@@ -193,15 +191,15 @@ class EvolutionController:
                 
             return True
         except Exception as e:
-            # Registrar exceção no log
+            # Registrar exceo no log
             if os.name == 'nt': log_dir = r"C:\Antigravity\credos"
             else: log_dir = os.path.join(os.getcwd(), "data")
             log_file = os.path.join(log_dir, "EVO_DEBUG.txt")
             with open(log_file, "a") as f:
-                f.write(f"[{self.instance}] EXCEÇÃO Envio Texto: {str(e)}\n")
+                f.write(f"[{self.instance}] EXCEO Envio Texto: {str(e)}\n")
             return False
         except Exception as e:
-            print(f"Erro Crítico WhatsApp Texto: {e}")
+            print(f"Erro Crtico WhatsApp Texto: {e}")
             return False
 
     def enviar_midia(self, numero, caminho):
@@ -213,14 +211,14 @@ class EvolutionController:
             mime, _ = mimetypes.guess_type(caminho)
             return self.enviar_midia_b64(numero, b64, mime or "image/jpeg", os.path.basename(caminho))
         except Exception as e:
-            print(f"Erro Crítico WhatsApp Mídia: {e}")
+            print(f"Erro Crtico WhatsApp Mdia: {e}")
             return False
 
     def enviar_midia_b64(self, numero, b64, mimetype, filename="arquivo"):
         try:
             if not self.url or not self.apikey: return False
             
-            # Se o número já vier com @ (ex: @lid ou @s.whatsapp.net), use como JID direto
+            # Se o nmero j vier com @ (ex: @lid ou @s.whatsapp.net), use como JID direto
             if "@" in str(numero):
                 target = str(numero)
             else:
@@ -237,20 +235,18 @@ class EvolutionController:
             
             payload = {
                 "number": target,
-                "mediaMessage": {
-                    "mediatype": mediatype,
-                    "fileName": filename,
-                    "caption": filename,
-                    "media": b64
-                }
+                "mediatype": mediatype,
+                "media": b64,
+                "fileName": filename,
+                "caption": filename
             }
             r = requests.post(endpoint, json=payload, headers=self.headers)
             if r.status_code not in [200, 201]:
-                self.debug_log("FALHA ENVIO MÍDIA B64", endpoint, r, payload)
+                self.debug_log("FALHA ENVIO MDIA B64", endpoint, r, payload)
                 return False
             return True
         except Exception as e:
-            print(f"Erro Crítico WhatsApp Mídia B64: {e}")
+            print(f"Erro Crtico WhatsApp Mdia B64: {e}")
             return False
 
     def buscar_qrcode(self):
@@ -275,7 +271,7 @@ class EvolutionController:
                         qr = f"data:image/png;base64,{qr}"
                     return qr
                 
-                # Se for só a string direta { "qrcode": "..." } ou erro count
+                # Se for s a string direta { "qrcode": "..." } ou erro count
                 # ignorar. A V1 manda no base64
             
             return None

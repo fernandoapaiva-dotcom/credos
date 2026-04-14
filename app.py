@@ -22,10 +22,12 @@ from src.manager import Manager
 from src.mail_scanner import conectar_email, MailScanner
 from src.evolution_controller import EvolutionController
 from src.extractor import ler_pdf_bruto, processar_dataframe_mapeado
+from src.proactive_scanner import proactive_worker
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="Credos SaaS", page_icon="🛡️", layout="wide", initial_sidebar_state="collapsed")
 inicializar_banco()
+proactive_worker.start()
 
 # --- ESTILOS CSS ---
 st.markdown("""
@@ -194,7 +196,7 @@ if selected == "Operacional":
         st.warning("⚠️ Nenhuma empresa selecionada. Vá em Gestão e selecione uma unidade.")
         st.stop()
     
-    t1, t2, t3, t4, t5 = st.tabs(["📂 Importar PDF", "📝 Lançar Manual", "💸 Cobrança (Envio)", "👥 CRM & Carteira", "📊 Relatórios"])
+    t1, t2, t3, t4, t5, t6 = st.tabs(["📂 Importar PDF", "📝 Lançar Manual", "💸 Cobrança (Envio)", "👥 CRM & Carteira", "📊 Relatórios", "🗄️ Repositório"])
 
     # --- ABA 1: IMPORTAÇÃO ---
     with t1:
@@ -720,6 +722,74 @@ if selected == "Operacional":
                     key="btn_dl_rel"
                 )
 
+    # --- ABA 6: REPOSITORIO FISCAL ---
+    with t6:
+        st.subheader("🗄️ Repositório Fiscal (Arquivo Morto)")
+        st.markdown("Busca de Notas Fiscais, Faturas e Boletos indexados automaticamente.")
+        
+        # Filtro
+        busca_nf = st.text_input("🔍 Buscar por Número da NF, CNPJ ou Nome do Cliente", placeholder="Digite a NF, CNPJ ou Nome...")
+        
+        from src.database import conectar
+        try:
+            conn = conectar(conf.get('empresa_cnpj'))
+            c = conn.cursor()
+            
+            query = "SELECT num_nf, tipo, cnpj_cliente, nome_cliente, fpath_local, created_at FROM documentos_fiscais WHERE pasta_repo IS NOT NULL"
+            params = []
+            
+            if busca_nf:
+                query += " AND (num_nf LIKE ? OR cnpj_cliente LIKE ? OR nome_cliente LIKE ?)"
+                like_str = f"%{busca_nf}%"
+                params.extend([like_str, like_str, like_str])
+                
+            query += " ORDER BY id DESC LIMIT 100"
+            c.execute(query, params)
+            registros = c.fetchall()
+            
+            if registros:
+                import pandas as pd
+                df_docs = pd.DataFrame(registros, columns=["Número NF", "Tipo", "CNPJ", "Cliente", "Caminho", "Data Indexação"])
+                
+                # Exibe a tabela simplificada
+                st.markdown(f"**Encontrados {len(registros)} documentos:**")
+                
+                # Seleção para Download
+                doc_selecionado = st.selectbox(
+                    "📥 Selecione um documento para baixar:", 
+                    registros, 
+                    format_func=lambda x: f"[{x[1]}] NF {x[0]} - {x[3]} ({x[2]})"
+                )
+                
+                if doc_selecionado:
+                    fpath = doc_selecionado[4]
+                    if os.path.exists(fpath):
+                        with open(fpath, "rb") as f:
+                            st.download_button(
+                                label=f"💾 Baixar {doc_selecionado[1]} {doc_selecionado[0]}",
+                                data=f,
+                                file_name=os.path.basename(fpath),
+                                mime="application/octet-stream",
+                                type="primary",
+                                use_container_width=True
+                            )
+                    else:
+                        st.error("⚠️ Arquivo não encontrado no servidor. O caminho pode ter sido alterado.")
+                
+                st.divider()
+                st.dataframe(df_docs, hide_index=True, use_container_width=True)
+            else:
+                st.info("Nenhum documento encontrado.")
+                
+        except Exception as e:
+            st.error(f"Erro ao carregar dados do repositório: {e}")
+        finally:
+            if 'conn' in locals():
+                try:
+                    conn.close()
+                except:
+                    pass
+
 # ==============================================================================
 # ÁREA DE ATENDIMENTO OMNICHANNEL (NOVO)
 # ==============================================================================
@@ -1190,6 +1260,30 @@ elif selected == "Configurações":
                             col_res.success("🤖 (SIMULADO): SISTEMA IA ONLINE")
                         else:
                             col_res.error(f"Erro: {e}")
+        
+        st.divider()
+        with st.expander("📡 Monitoramento Proativo (Caixa de Saída)"):
+            st.markdown("A Analu monitora automaticamente os e-mails enviados pelo SoftSystem para indexar notas e boletos.")
+            
+            # Contador de faturas no banco local
+            try:
+                conn_p = conectar(conf.get('empresa_cnpj'))
+                count_docs = conn_p.cursor().execute("SELECT count(*) FROM documentos_fiscais").fetchone()[0]
+                conn_p.close()
+            except: count_docs = 0
+            
+            st.metric("Faturas no Repositório Local", count_docs)
+            
+            if st.button("🔍 Indexar Histórico (desde Out/2025)", type="secondary", use_container_width=True):
+                with st.spinner("Varrendo Caixa de Saída e indexando notas antigas... Isso pode demorar."):
+                    # Out/2025 até hoje (~180 dias)
+                    sucesso_retro = proactive_worker.indexar_retroativo(conf.get('empresa_cnpj'), dias=180)
+                    if sucesso_retro:
+                        st.success("Histórico processado! As notas antigas agora estão disponíveis para envio instantâneo.")
+                        time.sleep(2)
+                        st.rerun()
+                    else:
+                        st.error("Não foi possível indexar o histórico. Verifique se a conexão IMAP está ativa nas configurações.")
 # --- WIZARD NOVO CADASTRO (Apenas se o sistema estiver vazio e não estivermos na aba Gestão) ---
 if st.session_state.get('novo_cadastro', False) and selected != "Gestão":
     st.markdown("---")

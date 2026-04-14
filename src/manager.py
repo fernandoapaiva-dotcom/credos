@@ -18,18 +18,18 @@ from email.mime.application import MIMEApplication
 class Manager:
     def __init__(self, cnpj_empresa):
         self.cnpj_empresa = cnpj_empresa
-        # Carrega configurações da empresa para IA e Evolution
+        # Carrega configuraes da empresa para IA e Evolution
         self.config = carregar_configuracoes_db(cnpj_empresa)
         self.evo = EvolutionController(self.config, cnpj_empresa)
 
     def _humanizar_detalhes(self, det_raw):
-        """Converte JSON técnico de logs em texto amigável."""
+        """Converte JSON tcnico de logs em texto amigvel."""
         if not det_raw: return ""
         if not isinstance(det_raw, str): return str(det_raw)
         
         det_raw = det_raw.strip()
         if not det_raw.startswith('{'):
-            return det_raw # Já é texto puro (ex: "Status alterado...")
+            return det_raw # J  texto puro (ex: "Status alterado...")
             
         try:
             js = json.loads(det_raw)
@@ -44,7 +44,7 @@ class Manager:
             if em is not None:
                 parts.append(f"E-mail: {'OK' if em else 'Falha'}")
                 
-            # 2. Títulos/NFs
+            # 2. Ttulos/NFs
             tits = js.get('titulos', [])
             if tits:
                 nfs = []
@@ -78,7 +78,7 @@ class Manager:
             count = c.fetchone()[0]
             return count > 0
         except Exception as e:
-            print(f"Erro ao verificar log de cobrança hoje: {e}")
+            print(f"Erro ao verificar log de cobrana hoje: {e}")
             return False
         finally:
             conn.close()
@@ -86,7 +86,7 @@ class Manager:
     def _formatar_data_br(self, data_str, incluir_hora=False):
         if not data_str: return "-"
         try:
-            # Tenta vários formatos comuns
+            # Tenta vrios formatos comuns
             for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
                 try:
                     dt = datetime.strptime(data_str[:19], fmt if len(data_str) >= len(fmt) else fmt[:len(data_str)])
@@ -122,7 +122,7 @@ class Manager:
             titulos = listar_titulos_por_cliente(self.cnpj_empresa, cli['nome'])
             pendentes = []
             for t in titulos:
-                if t['acao'] == 'Cobrar' and t['status'] in ('Aberto', 'Manter Aberto', 'Cartório'):
+                if t['acao'] == 'Cobrar' and t['status'] in ('Aberto', 'Manter Aberto', 'Cartrio'):
                     calc = self.calcular_valores_cdc(t['valor'], t['vencimento'])
                     t_copy = dict(t)
                     t_copy.update(calc)
@@ -141,7 +141,7 @@ class Manager:
 
     def calcular_valores_cdc(self, valor_original, vencimento_str, data_referencia=None):
         """
-        Calcula Multa (2% fixo) e Juros (1% ao mês pro-rata)
+        Calcula Multa (2% fixo) e Juros (1% ao ms pro-rata)
         Vencimento esperado em DD/MM/YYYY
         """
         try:
@@ -217,51 +217,51 @@ class Manager:
         contato = dados_cliente.get('contato') or dados_cliente.get('nome') or nome_cliente
         prazo_cartorio_config = self.config.get('dias_para_cartorio') if self.config.get('dias_para_cartorio') is not None else 10
         
-        has_cartorio = any(it.get('status') == 'Cartório' for it in itens)
+        has_cartorio = any(it.get('status') == 'Cartrio' for it in itens)
         dias_max_atraso = max([it.get('dias_atraso', 0) for it in itens]) if itens else 0
         restante_cartorio = prazo_cartorio_config - dias_max_atraso
         
         msg = f"{saudacao}, {contato}.\n\n"
         
         if has_cartorio:
-            msg += f"❗ *NOTIFICAÇÃO DE TÍTULO EM CARTÓRIO*\n\n"
-            msg += f"Informamos que os débitos abaixo em nome de *{nome_cliente}* já se encontram em processo de **PROTESTO/CARTÓRIO** devido ao tempo de atraso.\n\n"
+            msg += f" *NOTIFICAO DE TTULO EM CARTRIO*\n\n"
+            msg += f"Informamos que os dbitos abaixo em nome de *{nome_cliente}* j se encontram em processo de **PROTESTO/CARTRIO** devido ao tempo de atraso.\n\n"
         else:
-            msg += f"Identificamos pendências financeiras em aberto em nome de *{nome_cliente}*.\n\n"
+            msg += f"Identificamos pendncias financeiras em aberto em nome de *{nome_cliente}*.\n\n"
         
-        # Avisos de prazo (apenas se não estiver em cartório ou se houver outros a vencer)
+        # Avisos de prazo (apenas se no estiver em cartrio ou se houver outros a vencer)
         if not has_cartorio:
             if restante_cartorio > 5:
-                msg += f"🗓️ *Aviso:* Faltam {restante_cartorio} dias para o início do processo de negativação/cartório.\n"
+                msg += f" *Aviso:* Faltam {restante_cartorio} dias para o incio do processo de negativao/cartrio.\n"
             elif 1 < restante_cartorio <= 5:
-                msg += f"⚠️ *ALERTA URGENTE:* Faltam apenas *{restante_cartorio} dias* para o envio automático deste débito ao *CARTÓRIO*.\n"
+                msg += f" *ALERTA URGENTE:* Faltam apenas *{restante_cartorio} dias* para o envio automtico deste dbito ao *CARTRIO*.\n"
             elif restante_cartorio == 1:
-                msg += f"🚨 *NOTIFICAÇÃO FINAL:* Seu título será instruído para *CARTÓRIO AMANHÃ*.\n"
+                msg += f" *NOTIFICAO FINAL:* Seu ttulo ser instrudo para *CARTRIO AMANH*.\n"
             elif restante_cartorio == 0:
-                msg += f"❗ *PRAZO ESGOTADO:* O título atingiu o prazo limite e o processo de *CARTÓRIO* será iniciado HOJE.\n"
+                msg += f" *PRAZO ESGOTADO:* O ttulo atingiu o prazo limite e o processo de *CARTRIO* ser iniciado HOJE.\n"
         
         if has_cartorio:
-            msg += f"⚠️ *Atenção:* Títulos em cartório geram restrições imediatas ao crédito e custos adicionais operacionais.\n"
+            msg += f" *Ateno:* Ttulos em cartrio geram restries imediatas ao crdito e custos adicionais operacionais.\n"
 
-        msg += f"\n📋 *Detalhamento dos Títulos:*\n"
+        msg += f"\n *Detalhamento dos Ttulos:*\n"
         
         for item in itens:
-            msg += f"🧾 *NF {item['numero_nf']}* | Venc: {item['vencimento']} ({item['dias_atraso']} dias de atraso)\n"
-            msg += f"   • Principal: R$ {item['principal']:,.2f}\n"
+            msg += f" *NF {item['numero_nf']}* | Venc: {item['vencimento']} ({item['dias_atraso']} dias de atraso)\n"
+            msg += f"    Principal: R$ {item['principal']:,.2f}\n"
             if item.get('multa', 0) > 0 or item.get('juros', 0) > 0:
-                msg += f"   • (+) Encargos: R$ {item['multa'] + item['juros']:,.2f}\n"
-            msg += f"   • Subtotal: R$ {item['total']:,.2f}\n\n"
+                msg += f"    (+) Encargos: R$ {item['multa'] + item['juros']:,.2f}\n"
+            msg += f"    Subtotal: R$ {item['total']:,.2f}\n\n"
             
-        msg += f"✅ *VALOR TOTAL ATUALIZADO:* R$ {total:,.2f}\n\n"
+        msg += f" *VALOR TOTAL ATUALIZADO:* R$ {total:,.2f}\n\n"
         
         if has_cartorio:
-            msg += f"👉 *INSTRUÇÕES DE REGULARIZAÇÃO:*\n"
-            msg += f"1. O pagamento do valor acima deve ser feito à nossa empresa para quitação do débito.\n"
-            msg += f"2. As **taxas de cartório** deverão ser pagas por sua empresa **diretamente ao tabelionato**.\n"
-            msg += f"3. Após confirmarmos seu pagamento, emitiremos a **CARTA DE ANUÊNCIA** digital para que você possa baixar o protesto imediatamente.\n\n"
-            msg += f"Gentileza tratar este assunto com a máxima prioridade.\n\n"
+            msg += f" *INSTRUES DE REGULARIZAO:*\n"
+            msg += f"1. O pagamento do valor acima deve ser feito  nossa empresa para quitao do dbito.\n"
+            msg += f"2. As **taxas de cartrio** devero ser pagas por sua empresa **diretamente ao tabelionato**.\n"
+            msg += f"3. Aps confirmarmos seu pagamento, emitiremos a **CARTA DE ANUNCIA** digital para que voc possa baixar o protesto imediatamente.\n\n"
+            msg += f"Gentileza tratar este assunto com a mxima prioridade.\n\n"
         else:
-            msg += f"Gentileza entrar em contato para regularização.\n\n"
+            msg += f"Gentileza entrar em contato para regularizao.\n\n"
         
         return msg
 
@@ -306,8 +306,8 @@ class Manager:
         if not cli_dados: return {"whatsapp": False, "email": False}
         cli = cli_dados[0]
         
-        # FAIL-SAFE: Re-verifica no BANCO se os títulos ainda estão para 'Cobrar'
-        # Isso evita Race Conditions se o usuário baixar o título enquanto o robô está rodando
+        # FAIL-SAFE: Re-verifica no BANCO se os ttulos ainda esto para 'Cobrar'
+        # Isso evita Race Conditions se o usurio baixar o ttulo enquanto o rob est rodando
         conn = conectar(self.cnpj_empresa)
         c = conn.cursor()
         itens_validados = []
@@ -315,15 +315,15 @@ class Manager:
             tid = it.get('id')
             if not tid: continue
             row = c.execute("SELECT status, acao FROM titulos WHERE id=?", (tid,)).fetchone()
-            if row and row[1] == 'Cobrar' and row[0] in ('Aberto', 'Manter Aberto', 'Cartório'):
+            if row and row[1] == 'Cobrar' and row[0] in ('Aberto', 'Manter Aberto', 'Cartrio'):
                 itens_validados.append(it)
         conn.close()
 
         if not itens_validados:
-            print(f"⚠️ [FAIL-SAFE] Abortando envio para {cliente_nome}: Todos os títulos foram baixados ou pausados recentemente.")
+            print(f" [FAIL-SAFE] Abortando envio para {cliente_nome}: Todos os ttulos foram baixados ou pausados recentemente.")
             return {"whatsapp": False, "email": False, "skipped": True}
         
-        # Se alguns foram baixados mas outros não, atualizamos o conteúdo para não cobrar o que já foi pago
+        # Se alguns foram baixados mas outros no, atualizamos o contedo para no cobrar o que j foi pago
         itens = itens_validados
         
         # 1. Enviar WhatsApp via Evolution
@@ -350,9 +350,9 @@ class Manager:
                     mail = MIMEMultipart()
                     mail['From'] = f"Financeiro <{email_user}>"
                     mail['To'] = dest
-                    mail['Subject'] = f"Aviso de Cobrança - {cliente_nome}"
+                    mail['Subject'] = f"Aviso de Cobrana - {cliente_nome}"
                     
-                    corpo = f"Olá {cliente_nome},\n\n" + msg.replace("*", "")
+                    corpo = f"Ol {cliente_nome},\n\n" + msg.replace("*", "")
                     mail.attach(MIMEText(corpo, 'plain'))
                     
                     if zip_path and os.path.exists(zip_path):
@@ -399,7 +399,7 @@ class Manager:
         if canais_selecionados is None: canais_selecionados = ["whatsapp", "email"]
         fila = self.agrupar_debitos_por_cliente()
         if nome_cliente not in fila:
-            return {"success": False, "message": "Nenhuma pendência para este cliente."}
+            return {"success": False, "message": "Nenhuma pendncia para este cliente."}
         
         info = fila[nome_cliente]
         msg = self.gerar_mensagem_cobranca(nome_cliente, info['dados_cliente'], info['total'], info['itens'])
@@ -414,7 +414,7 @@ class Manager:
         c.execute("SELECT * FROM titulos WHERE id=?", (id_titulo,))
         row = c.fetchone()
         conn.close()
-        if not row: return {"success": False, "message": "Título não encontrado."}
+        if not row: return {"success": False, "message": "Ttulo no encontrado."}
         
         # Colunas: id, pagador, numero_nf, vencimento, valor, status, acao
         tit = {
@@ -431,7 +431,7 @@ class Manager:
         tit.update(calc) # Adiciona principal, multa, juros, total, dias_atraso
         
         cli_dados = listar_clientes_db(self.cnpj_empresa, nome_filtro=tit['pagador'])
-        if not cli_dados: return {"success": False, "message": f"Cliente {tit['pagador']} não encontrado no CRM."}
+        if not cli_dados: return {"success": False, "message": f"Cliente {tit['pagador']} no encontrado no CRM."}
         cli = cli_dados[0]
         
         msg = self.gerar_mensagem_cobranca(tit['pagador'], cli, tit['total'], [tit])
@@ -446,9 +446,9 @@ class Manager:
         """
         conn = conectar(self.cnpj_empresa)
         cursor = conn.cursor()
-        # Seleciona títulos elegíveis para cobrança (mesmo que pausados individualmente, o motor pode vê-los)
+        # Seleciona ttulos elegveis para cobrana (mesmo que pausados individualmente, o motor pode v-los)
         # Sincronizado com agrupar_debitos_por_cliente
-        cursor.execute("SELECT * FROM titulos WHERE status IN ('Aberto', 'Manter Aberto', 'Cartório')")
+        cursor.execute("SELECT * FROM titulos WHERE status IN ('Aberto', 'Manter Aberto', 'Cartrio')")
         rows = cursor.fetchall()
         conn.close()
 
@@ -558,7 +558,7 @@ class Manager:
                 query = f"""
                     SELECT data_envio as data_hora, cliente as pagador, detalhes as obs, usuario
                     FROM logs_envio
-                    WHERE tipo_envio = 'Exclusão CRM' {where_str}
+                    WHERE tipo_envio = 'Excluso CRM' {where_str}
                 """
                 df = pd.read_sql_query(query, conn, params=params)
 
@@ -589,12 +589,12 @@ class Manager:
                 df = pd.read_sql_query(query, conn, params=params)
 
         except Exception as e:
-            print(f"Erro ao consultar dados para relatório: {e}")
+            print(f"Erro ao consultar dados para relatrio: {e}")
             df = pd.DataFrame()
         finally:
             conn.close()
 
-        # --- GERAÇÃO DO PDF ---
+        # --- GERAO DO PDF ---
         pdf = FPDF(orientation='L', unit='mm', format='A4')
         pdf.add_page()
         
@@ -604,40 +604,40 @@ class Manager:
             try: pdf.image(credos_logo, 10, 10, h=10)
             except: pass
 
-        # Cabeçalho
+        # Cabealho
         pdf.set_font("Arial", 'B', 14)
         pdf.set_y(15)
         pdf.cell(0, 6, str(empresa_nome).upper(), 0, 1, 'C')
         
         titulos_map = {
-            "Cobrados": "TÍTULOS COBRADOS (OPERADOR & ANALU)",
-            "Baixados": "RELATÓRIO DE TÍTULOS BAIXADOS / PAGOS",
-            "Cancelados": "RELATÓRIO DE TÍTULOS CANCELADOS",
-            "Excluidos": "HISTÓRICO DE EXCLUSÕES NO CRM",
-            "Solicitado_Cartorio": "TÍTULOS SOLICITADOS PARA CARTÓRIO (OPERADOR)",
-            "Enviado_Cartorio": "TÍTULOS ENVIADOS PARA CARTÓRIO (ANALU IA)"
+            "Cobrados": "TTULOS COBRADOS (OPERADOR & ANALU)",
+            "Baixados": "RELATRIO DE TTULOS BAIXADOS / PAGOS",
+            "Cancelados": "RELATRIO DE TTULOS CANCELADOS",
+            "Excluidos": "HISTRICO DE EXCLUSES NO CRM",
+            "Solicitado_Cartorio": "TTULOS SOLICITADOS PARA CARTRIO (OPERADOR)",
+            "Enviado_Cartorio": "TTULOS ENVIADOS PARA CARTRIO (ANALU IA)"
         }
         pdf.set_font("Arial", 'B', 11)
-        pdf.cell(0, 6, titulos_map.get(tipo_rel, "RELATÓRIO DE ATIVIDADES"), 0, 1, 'C')
+        pdf.cell(0, 6, titulos_map.get(tipo_rel, "RELATRIO DE ATIVIDADES"), 0, 1, 'C')
         
         pdf.set_font("Arial", '', 8)
-        pdf.cell(0, 5, f"Período: {data_inicio or 'Início'} até {data_fim or 'Hoje'} | Emissão: {datetime.now().strftime('%d/%m/%Y %H:%M')}", 0, 1, 'R')
+        pdf.cell(0, 5, f"Perodo: {data_inicio or 'Incio'} at {data_fim or 'Hoje'} | Emisso: {datetime.now().strftime('%d/%m/%Y %H:%M')}", 0, 1, 'R')
         pdf.ln(5)
 
         if df.empty:
             pdf.ln(20)
             pdf.set_font("Arial", 'B', 12)
-            pdf.cell(0, 10, "Nenhum registro encontrado para este relatório.", 0, 1, 'C')
+            pdf.cell(0, 10, "Nenhum registro encontrado para este relatrio.", 0, 1, 'C')
         else:
-            # Seleção de Colunas
+            # Seleo de Colunas
             if tipo_rel == "Cobrados":
-                cols = [("Data/Hora", 35), ("Cliente", 65), ("Canal", 25), ("Status", 25), ("Usuário", 30), ("Detalhes", 100)]
+                cols = [("Data/Hora", 35), ("Cliente", 65), ("Canal", 25), ("Status", 25), ("Usurio", 30), ("Detalhes", 100)]
             elif tipo_rel in ("Baixados", "Cancelados", "Solicitado_Cartorio", "Enviado_Cartorio"):
                 cols = [("Data/Hora", 40), ("Cliente", 90), ("NF", 30), ("Valor", 40), ("Complemento", 80)]
             else: # Excluidos
-                cols = [("Data/Hora", 40), ("Cliente", 90), ("Usuário", 40), ("Ocorrência", 110)]
+                cols = [("Data/Hora", 40), ("Cliente", 90), ("Usurio", 40), ("Ocorrncia", 110)]
 
-            # Cabeçalho da Tabela
+            # Cabealho da Tabela
             pdf.set_fill_color(30, 80, 160)
             pdf.set_text_color(255, 255, 255)
             pdf.set_font("Arial", 'B', 8)

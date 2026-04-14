@@ -37,6 +37,7 @@ def conectar(cnpj=None):
             else:
                 _verificar_migracoes_config(conn)
                 _verificar_migracoes_v3(conn) # Novas tabelas Negociação e Cartório
+                _verificar_migracoes_v4(conn) # Tabela de Documentos Proativos
         except:
             _criar_tabelas_empresa(conn)
         return conn
@@ -150,6 +151,31 @@ def _verificar_migracoes_v3(conn):
     cols = [col[1] for col in c.fetchall()]
     if 'operador_whatsapp' not in cols:
         c.execute("ALTER TABLE config ADD COLUMN operador_whatsapp TEXT")
+
+    # Coluna para controle de resiliência de agendamento (Analu Anti-Falhas)
+    c.execute("PRAGMA table_info(agendamento)")
+    ag_cols = [col[1] for col in c.fetchall()]
+    if 'ultima_execucao' not in ag_cols:
+        c.execute("ALTER TABLE agendamento ADD COLUMN ultima_execucao TEXT")
+    
+    conn.commit()
+
+def _verificar_migracoes_v4(conn):
+    """Garante a existência da tabela de documentos fiscais indexados."""
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS documentos_fiscais (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        cnpj_cliente TEXT,
+        num_nf TEXT,
+        tipo TEXT, 
+        emissao TEXT,
+        vencimento TEXT,
+        valor REAL,
+        fpath_local TEXT,
+        email_uid TEXT,
+        chave_acesso TEXT,
+        created_at TEXT
+    )''')
     conn.commit()
 
 
@@ -218,6 +244,13 @@ def _criar_tabelas_empresa(conn):
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         titulo_id INTEGER, status_automacao TEXT DEFAULT 'Pendente',
         log_erro TEXT, data_execucao TEXT, intervacao_manual INTEGER DEFAULT 0
+    )''')
+    # 10. Documentos Fiscais Indexados (Proativo)
+    c.execute('''CREATE TABLE IF NOT EXISTS documentos_fiscais (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        cnpj_cliente TEXT, num_nf TEXT, tipo TEXT, 
+        emissao TEXT, vencimento TEXT, valor REAL, 
+        fpath_local TEXT, email_uid TEXT, chave_acesso TEXT, created_at TEXT
     )''')
     conn.commit()
 
