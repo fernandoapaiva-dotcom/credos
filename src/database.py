@@ -270,6 +270,16 @@ def inicializar_banco():
         empresa_nome TEXT, empresa_cnpj TEXT UNIQUE, data_cadastro TEXT
     )''')
     
+    # Tabela de Contatos Globais (A Fonte Única de Verdade)
+    c.execute('''CREATE TABLE IF NOT EXISTS contatos_globais (
+        cnpj TEXT PRIMARY KEY,
+        whatsapp TEXT,
+        email TEXT,
+        contato TEXT,
+        endereco TEXT,
+        last_update TEXT
+    )''')
+    
     # Usuário Admin Padrão
     if c.execute("SELECT count(*) FROM usuarios").fetchone()[0] == 0:
         c.execute("INSERT INTO usuarios (login, password, nome_completo, perfil) VALUES (?,?,?,?)",
@@ -421,7 +431,35 @@ def listar_clientes_db(cnpj_empresa, nome_filtro=None):
     else:
         res = conn.cursor().execute("SELECT * FROM clientes").fetchall()
     conn.close()
-    return [dict(r) for r in res]
+    
+    clientes = [dict(r) for r in res]
+    
+    # --- ENRIQUECIMENTO GLOBAL ---
+    # Busca dados unificados no banco central para bater com o CNPJ
+    try:
+        conn_cent = conectar()
+        conn_cent.row_factory = sqlite3.Row
+        c_cent = conn_cent.cursor()
+        
+        for cli in clientes:
+            cnpj_norm = _normalizar_cnpj(cli.get('cnpj'))
+            if cnpj_norm:
+                global_data = c_cent.execute(
+                    "SELECT whatsapp, email, contato, endereco FROM contatos_globais WHERE cnpj = ?", 
+                    (cnpj_norm,)
+                ).fetchone()
+                
+                if global_data:
+                    # Sobrescreve com o dado global (Fonte Única de Verdade)
+                    if global_data['whatsapp']: cli['whatsapp'] = global_data['whatsapp']
+                    if global_data['email']: cli['email'] = global_data['email']
+                    if global_data['contato']: cli['contato'] = global_data['contato']
+                    if global_data['endereco']: cli['endereco'] = global_data['endereco']
+        conn_cent.close()
+    except Exception as e:
+        print(f"Erro ao enriquecer clientes com dados globais: {e}")
+        
+    return clientes
 
 def verificar_cliente_existe(cnpj_empresa, nome_cliente):
     if not cnpj_empresa: return False
@@ -429,6 +467,38 @@ def verificar_cliente_existe(cnpj_empresa, nome_cliente):
     res = conn.cursor().execute("SELECT id FROM clientes WHERE trim(nome)=?", (nome_cliente.strip(),)).fetchone()
     conn.close()
     return res is not None
+
+def _normalizar_cnpj(cnpj):
+    if not cnpj: return ""
+    return "".join(filter(str.isdigit, str(cnpj)))
+
+def upsert_contato_global(cnpj, whatsapp, email, contato=None, endereco=None):
+    """Atualiza ou insere dados na tabela central de contatos globais."""
+    cnpj_clean = _normalizar_cnpj(cnpj)
+    if not cnpj_clean: return
+    
+    conn = conectar() # Central
+    c = conn.cursor()
+    try:
+        agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        # Upsert: se já existe o CNPJ, atualiza apenas o que não for vazio
+        c.execute("SELECT cnpj FROM contatos_globais WHERE cnpj = ?", (cnpj_clean,))
+        if c.fetchone():
+            c.execute("""
+                UPDATE contatos_globais 
+                SET whatsapp=?, email=?, contato=?, endereco=?, last_update=?
+                WHERE cnpj=?
+            """, (whatsapp, email, contato, endereco, agora, cnpj_clean))
+        else:
+            c.execute("""
+                INSERT INTO contatos_globais (cnpj, whatsapp, email, contato, endereco, last_update)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (cnpj_clean, whatsapp, email, contato, endereco, agora))
+        conn.commit()
+    except Exception as e:
+        print(f"Erro ao salvar contato global: {e}")
+    finally:
+        conn.close()
 
 def salvar_cliente_db(cnpj_empresa, nome, cnpj, whatsapp, email, contato=None):
     if not cnpj_empresa: return
@@ -443,6 +513,10 @@ def salvar_cliente_db(cnpj_empresa, nome, cnpj, whatsapp, email, contato=None):
                   (cnpj, whatsapp, email, contato if contato else "", nome))
     conn.commit()
     conn.close()
+    
+    # SINCRONIZAÇÃO GLOBAL: Se tem CNPJ, salva na tabela mestre central
+    if cnpj and _normalizar_cnpj(cnpj):
+        upsert_contato_global(cnpj, whatsapp, email, contato)
 
 def excluir_cliente_db(cnpj_empresa, id_cliente, nome_cliente, usuario=None):
     if not cnpj_empresa: return
