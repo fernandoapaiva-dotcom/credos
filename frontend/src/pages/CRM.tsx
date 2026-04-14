@@ -657,8 +657,8 @@ export const CRM: React.FC = () => {
                 ) : (
                   <div className="grid grid-cols-1 gap-4">
                     {displayedTitles.map(t => (
-                      <div key={t.id} className="border border-slate-200 dark:border-dark-border rounded-2xl p-5 flex flex-col xl:flex-row items-center justify-between gap-6 bg-white dark:bg-dark-surface shadow-sm hover:shadow-md transition-all">
-                        <div className="flex items-center gap-4 w-full xl:w-auto flex-1">
+                      <div key={t.id} className="border border-slate-200 dark:border-dark-border rounded-2xl p-5 flex flex-col 2xl:flex-row items-start 2xl:items-center justify-between gap-6 bg-white dark:bg-dark-surface shadow-sm hover:shadow-md transition-all">
+                        <div className="flex items-start 2xl:items-center gap-4 w-full flex-1">
                           <input 
                             type="checkbox"
                             checked={selectedTitleIds.includes(t.id)}
@@ -736,7 +736,7 @@ export const CRM: React.FC = () => {
                         </div>
                         </div>
                         
-                        <div className="flex flex-wrap items-center gap-3 w-full xl:w-auto flex-shrink-0">
+                        <div className="flex flex-wrap items-center justify-end gap-2 w-full 2xl:w-auto flex-shrink-0 mt-4 2xl:mt-0">
                           <button
                             onClick={() => handleViewDocuments(t)}
                             className="flex-1 md:flex-none px-4 py-3 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700 transition-all shadow-md flex items-center gap-2 group"
