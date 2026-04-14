@@ -15,6 +15,7 @@ class MailScanner:
         
         self.base_temp = "temp_data"
         self.pasta_destino = os.path.join(self.base_temp, "attachments")
+        self.enviados_detectada = None
         
         # LIMPEZA ABRUPTA DO CACHE FSICO
         import shutil
@@ -55,6 +56,53 @@ class MailScanner:
             status, _ = mail.select(nome_pasta)
             if status == "OK": return True
         except: pass
+        return False
+
+    def descobrir_pasta_enviados(self, mail):
+        """Tenta descobrir qual a pasta de itens ENVIADOS no IMAP."""
+        if self.enviados_detectada:
+            return self._selecionar_pasta_segura(mail, self.enviados_detectada)
+
+        try:
+            status, list_data = mail.list()
+            if status != "OK": return False
+            
+            # Mapas comuns de nomes de pastas de enviados
+            noms_pasto = ['SENT', 'ENVIADOS', 'ENVIADAS', 'ENVIEI', 'OUTBOX', 'ITEMS ENVIADOS', 'ENVIADOS - YAHOO']
+            
+            # 1. Procura por atributos (flags) do IMAP (RFC 6154)
+            for line in list_data:
+                line_decode = line.decode('utf-8', errors='ignore')
+                if '\\Sent' in line_decode:
+                    parts = line_decode.split(' "/" ')
+                    if len(parts) > 1:
+                        target = parts[-1].strip().strip('"')
+                        if self._selecionar_pasta_segura(mail, target):
+                            self.enviados_detectada = target
+                            return True
+
+            # 2. Heurstica por nomes comuns
+            for p in noms_pasto:
+                for line in list_data:
+                    line_decode = line.decode('utf-8', errors='ignore').upper()
+                    if f'"{p}"' in line_decode or f'/{p}' in line_decode or line_decode.endswith(p):
+                        # Pega o nome real da pasta entre aspas no final da linha
+                        parts = line_decode.split(' "/" ')
+                        if len(parts) > 1:
+                            target = parts[-1].strip().strip('"')
+                            if self._selecionar_pasta_segura(mail, target):
+                                self.enviados_detectada = target
+                                return True
+            
+            # 3. Fallback: Tenta os nomes diretos
+            for p in noms_pasto:
+                if self._selecionar_pasta_segura(mail, p):
+                    self.enviados_detectada = p
+                    return True
+                    
+        except Exception as e:
+            print(f"Erro ao descobrir pasta de enviados: {e}")
+            
         return False
 
     def _extrair_texto_arquivo(self, filepath):
