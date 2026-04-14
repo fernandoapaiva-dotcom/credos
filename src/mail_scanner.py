@@ -156,13 +156,26 @@ class MailScanner:
             
         return dados
 
-    def extrair_meta_documento(self, filepath, cnpj_alvo, nome_alvo, nf_alvo, vencimento_alvo):
-        """Extrai todos os metadados matemticos e de identidade do arquivo."""
-        meta = {'pertence_cliente': False, 'tem_nf': False, 'valores': set(), 'tem_vencimento': False, 'eh_imagem': False, 'conflito_identidade': False}
+    def extrair_meta_documento(self, filepath, cnpj_alvo, nome_alvo, nf_alvo, vencimento_alvo, extra_context=None):
+        """Extrai todos os metadados matemáticos e de identidade do arquivo."""
+        meta = {
+            'pertence_cliente': False, 
+            'tem_nf': False, 
+            'valores': set(), 
+            'tem_vencimento': False, 
+            'eh_imagem': False, 
+            'conflito_identidade': False,
+            'emissao': None,
+            'tipo_detectado': 'BOLETO',
+            'cnpj_detectado': None,
+            'nf_detectada': None
+        }
         texto = self._extrair_texto_arquivo(filepath)
         fname_limpo = os.path.basename(filepath).lower()
         
-        texto_limpo = re.sub(r'\D', '', texto) if texto else ""
+        # Consolida tudo o que temos para pesquisar: texto do arquivo + assunto do e-mail (contexto)
+        todo_texto = (texto or "") + " " + (extra_context or "")
+        texto_limpo = re.sub(r'\D', '', todo_texto) if todo_texto else ""
         texto_upper = texto.upper() if texto else ""
         
         if not texto:
