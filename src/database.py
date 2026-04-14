@@ -27,7 +27,7 @@ def conectar(cnpj=None):
         # Limpa o CNPJ para usar como nome de arquivo
         safe_cnpj = str(cnpj).replace('.', '').replace('/', '').replace('-', '').strip()
         db_path = os.path.join(DATABASE_DIR, f"{DB_PREFIX}{safe_cnpj}.db")
-        conn = sqlite3.connect(db_path)
+        conn = sqlite3.connect(db_path, timeout=30)
         # Verifica se as tabelas fundamentais existem
         c = conn.cursor()
         try:
