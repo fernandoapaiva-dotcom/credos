@@ -60,6 +60,11 @@ def update_client(id: int, client: ClientModel, x_company_cnpj: str = Header(...
             WHERE id=?
         """, (client.nome, client.cnpj, client.whatsapp, client.email, client.contato, id))
         conn.commit()
+        
+        # Sincroniza com o banco global para evitar que o listar_clientes_db sobrescreva o dado local com o global antigo
+        from src.database import upsert_contato_global
+        upsert_contato_global(client.cnpj, client.whatsapp, client.email, client.contato)
+        
         return {"success": True, "message": "Cliente atualizado."}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))

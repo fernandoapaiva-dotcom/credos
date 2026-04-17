@@ -26,7 +26,7 @@ def add_company(company: CompanyCreate):
     else:
         raise HTTPException(status_code=400, detail=msg)
 
-@router.put("/{cnpj}")
+@router.put("/{cnpj:path}")
 def update_company(cnpj: str, company: CompanyCreate):
     from src.database import atualizar_unidade_central
     sucesso, msg = atualizar_unidade_central(cnpj, company.nome, company.cnpj)
@@ -35,7 +35,7 @@ def update_company(cnpj: str, company: CompanyCreate):
     else:
         raise HTTPException(status_code=400, detail=msg)
 
-@router.delete("/{cnpj}")
+@router.delete("/{cnpj:path}")
 def delete_company(cnpj: str):
     sucesso, msg = excluir_unidade_central(cnpj)
     if sucesso:
@@ -43,24 +43,32 @@ def delete_company(cnpj: str):
     else:
         raise HTTPException(status_code=400, detail=msg)
 
-@router.get("/{cnpj}/config")
+@router.get("/{cnpj:path}/config")
 def get_company_config(cnpj: str):
     conf = carregar_configuracoes_db(cnpj)
     if not conf:
         raise HTTPException(status_code=404, detail="Config não encontrada")
     return conf
 
-@router.patch("/{cnpj}/config")
-def update_company_config(cnpj: str, updates: dict):
+from fastapi import BackgroundTasks
+
+@router.patch("/{cnpj:path}/config")
+def update_company_config(cnpj: str, updates: dict, background_tasks: BackgroundTasks):
     salvar_configuracoes_db(cnpj, updates)
+    
+    # Se o operador do whatsapp foi alterado, aciona a sincronização de grupo em background
+    if 'operador_whatsapp' in updates:
+        from src.group_sync import sincronizar_grupo_operadores
+        background_tasks.add_task(sincronizar_grupo_operadores, cnpj)
+        
     return {"success": True, "message": "Configurações atualizadas."}
 
-@router.get("/{cnpj}/scheduler")
+@router.get("/{cnpj:path}/scheduler")
 def get_scheduler(cnpj: str):
     mgr = Manager(cnpj)
     return {"scheduler": mgr.obter_agendamento()}
 
-@router.post("/{cnpj}/scheduler")
+@router.post("/{cnpj:path}/scheduler")
 def update_scheduler(cnpj: str, sched: dict):
     # Expects {'dias': [], 'hora': '09:00', 'ignorar_feriados': True, 'ativo': True}
     mgr = Manager(cnpj)
@@ -72,18 +80,23 @@ def update_scheduler(cnpj: str, sched: dict):
     )
     return {"success": True, "message": "Agendamento salvo."}
 
-@router.post("/{cnpj}/whatsapp/status")
-def whatsapp_status(cnpj: str):
+@router.post("/{p1}/whatsapp/status")
+@router.post("/{p1}/{p2}/whatsapp/status")
+def whatsapp_status(p1: str, p2: str = None):
+    cnpj = f"{p1}/{p2}" if p2 else p1
     conf = carregar_configuracoes_db(cnpj)
     nome_instancia = str(cnpj).replace('.', '').replace('/', '').replace('-', '')
     
-    # Needs valid global evo_url and evo_key set in .env or config
     evo = EvolutionController(config=conf, nome_empresa_cliente=nome_instancia)
     status = evo.checar_status()
+    if status == "connecting":
+        status = "disconnected"
     return {"status": status}
 
-@router.post("/{cnpj}/whatsapp/create")
-def whatsapp_create(cnpj: str):
+@router.post("/{p1}/whatsapp/create")
+@router.post("/{p1}/{p2}/whatsapp/create")
+def whatsapp_create(p1: str, p2: str = None):
+    cnpj = f"{p1}/{p2}" if p2 else p1
     conf = carregar_configuracoes_db(cnpj)
     nome_instancia = str(cnpj).replace('.', '').replace('/', '').replace('-', '')
     evo = EvolutionController(config=conf, nome_empresa_cliente=nome_instancia)
@@ -93,8 +106,10 @@ def whatsapp_create(cnpj: str):
         raise HTTPException(status_code=400, detail=str(res.get("error")))
     return {"success": True}
 
-@router.get("/{cnpj}/whatsapp/qr")
-def whatsapp_qr(cnpj: str):
+@router.get("/{p1}/whatsapp/qr")
+@router.get("/{p1}/{p2}/whatsapp/qr")
+def whatsapp_qr(p1: str, p2: str = None):
+    cnpj = f"{p1}/{p2}" if p2 else p1
     conf = carregar_configuracoes_db(cnpj)
     nome_instancia = str(cnpj).replace('.', '').replace('/', '').replace('-', '')
     evo = EvolutionController(config=conf, nome_empresa_cliente=nome_instancia)
@@ -105,7 +120,7 @@ def whatsapp_qr(cnpj: str):
         raise HTTPException(status_code=404, detail="QR Code não disponivel ainda")
     return {"qr_code_base64": qr}
 
-@router.delete("/{cnpj}/whatsapp")
+@router.delete("/{cnpj:path}/whatsapp")
 def whatsapp_delete(cnpj: str):
     conf = carregar_configuracoes_db(cnpj)
     nome_instancia = str(cnpj).replace('.', '').replace('/', '').replace('-', '')
@@ -113,7 +128,7 @@ def whatsapp_delete(cnpj: str):
     evo.deletar_instancia()
     return {"success": True}
 
-@router.post("/{cnpj}/email/test")
+@router.post("/{cnpj:path}/email/test")
 def email_test(cnpj: str):
     conf = carregar_configuracoes_db(cnpj)
     import smtplib
@@ -132,7 +147,7 @@ def email_test(cnpj: str):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Erro de Conexão SMTP: {str(e)}")
 
-@router.post("/{cnpj}/email/test-imap")
+@router.post("/{cnpj:path}/email/test-imap")
 def email_test_imap(cnpj: str):
     conf = carregar_configuracoes_db(cnpj)
     import imaplib
@@ -195,7 +210,7 @@ def ai_trigger(cnpj: str, background_tasks: BackgroundTasks):
     background_tasks.add_task(disparar_negociacoes_ia, cnpj, True)
     return {"success": True, "message": "Disparo IA iniciado em segundo plano com sucesso."}
 
-@router.post("/{cnpj}/cartorio/test-cert")
+@router.post("/{cnpj:path}/cartorio/test-cert")
 def test_cartorio_cert(cnpj: str):
     conf = carregar_configuracoes_db(cnpj)
     pfx_b64 = conf.get('cartorio_pfx_b64')
@@ -222,4 +237,3 @@ def test_cartorio_cert(cnpj: str):
         return {"success": True, "message": f"✅ Certificado Válido! ({cn})"}
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"❌ Erro ao ler certificado. Verifique a senha e o arquivo (.pfx ou .p12). Erro: {str(e)}")
-

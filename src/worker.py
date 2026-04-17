@@ -150,6 +150,32 @@ def disparar_cobranca_automatica(forcar_execucao=False, cnpj_filtro=None, canais
             # Marca que o ciclo automático desta empresa foi concluído
             if not forcar_execucao:
                 marcar_execucao_hoje(cnpj_empresa)
+                
+            # --- ENVIO DO RELATORIO DIÁRIO (FIM DO CICLO DA EMPRESA) ---
+            # --- NÃO ALTERAR: RELATÓRIO PDF DIÁRIO BLINDADO ---
+            try:
+                # Localiza se existe um grupo unificado configurado no banco central
+                from src.database import conectar as conectar_central
+                conn_c = conectar_central()
+                g_res = conn_c.cursor().execute("SELECT grupo_relatorio_jid FROM config_global WHERE id = 1").fetchone()
+                conn_c.close()
+                
+                if g_res and g_res[0]:
+                    grupo_jid = g_res[0]
+                    pdf_path = mgr.gerar_relatorio_pdf_operacao_diaria()
+                    if os.path.exists(pdf_path):
+                        # Envia uma mensagem de contexto primeiro
+                        nome_unidade = mgr.config.get('empresa_nome', cnpj_empresa)
+                        mgr.evo.enviar_mensagem_texto(grupo_jid, f"📊 *Relatório Diário de Operação*\nUnidade: {nome_unidade}\n\nSegue o resumo das atividades financeiras realizadas pela Analu hoje:")
+                        # Lê o arquivo e envia como b64 para garantir compatibilidade com Evoluvion
+                        with open(pdf_path, "rb") as f:
+                            import base64
+                            b64_pdf = base64.b64encode(f.read()).decode('utf-8')
+                        mgr.evo.enviar_midia_b64(grupo_jid, b64_pdf, "application/pdf", os.path.basename(pdf_path))
+                        print(f"   📊 Relatório diário de {cnpj_empresa} enviado para o grupo.")
+            except Exception as er_rel:
+                print(f"   ⚠️ Erro ao enviar relatório diário: {er_rel}")
+            # ----------------------------------------------------
 
         except Exception as e_emp:
             error_msg = f"❌ Erro crítico ao processar empresa {cnpj_empresa}: {e_emp}"
@@ -234,9 +260,19 @@ def disparar_negociacoes_ia(cnpj_filtro=None, forcar_hoje=False):
                 print(f"⏩ Pulando IA {cnpj}: Hoje é feriado nacional.")
                 continue
                 
+        # Verifica se está dentro da janela de 10 minutos do horário configurado
+        if not forcar_hoje:
             horario_esperado = ag.get('horario_envio', '09:00')
-            if hora_atual != horario_esperado:
-                continue
+            try:
+                ref_dt = datetime.strptime(horario_esperado, "%H:%M")
+                now_dt = datetime.strptime(hora_atual, "%H:%M")
+                diff_min = (now_dt - ref_dt).total_seconds() / 60
+                
+                if not (0 <= diff_min <= 10):
+                    continue
+            except:
+                if hora_atual != horario_esperado:
+                    continue
 
 
         try:
@@ -260,10 +296,12 @@ def disparar_negociacoes_ia(cnpj_filtro=None, forcar_hoje=False):
                 max_dias = max(it['dias_atraso'] for it in itens_elegíveis)
                 whatsapp = info['dados_cliente'].get('whatsapp', '')
                 if not whatsapp:
+                    print(f"   ⏭️ {cliente}: Sem número de WhatsApp cadastrado. Pulando.")
                     continue
 
                 numeros = [n.strip() for n in whatsapp.split(';') if n.strip()]
                 if not numeros:
+                    print(f"   ⏭️ {cliente}: Lista de números vazia. Pulando.")
                     continue
 
                 conn = conectar(cnpj)
@@ -405,6 +443,25 @@ def disparar_negociacoes_ia(cnpj_filtro=None, forcar_hoje=False):
                 conn4.close()
 
                 time.sleep(5)
+                
+            # --- ENVIO DO RELATORIO DIÁRIO (FIM DO CICLO DA EMPRESA) ---
+            try:
+                # Localiza se existe um grupo unificado configurado no banco central
+                from src.database import conectar as conectar_central
+                conn_c = conectar_central()
+                g_res = conn_c.cursor().execute("SELECT grupo_relatorio_jid FROM config_global WHERE id = 1").fetchone()
+                conn_c.close()
+                
+                if g_res and g_res[0]:
+                    grupo_jid = g_res[0]
+                    pdf_path = mgr.gerar_relatorio_pdf_operacao_diaria()
+                    if os.path.exists(pdf_path):
+                        # Envia uma mensagem de contexto primeiro
+                        evo.enviar_mensagem_texto(grupo_jid, f"📊 *Relatório Diário de Operação*\nUnidade: {config.get('empresa_nome', cnpj)}\n\nSegue o resumo das atividades financeiras realizadas hoje:")
+                        evo.enviar_midia(grupo_jid, pdf_path)
+                        print(f"   📊 Relatório diário de {cnpj} enviado para o grupo de operadores.")
+            except Exception as er_rel:
+                print(f"   ⚠️ Erro ao enviar relatório diário para o grupo: {er_rel}")
 
         except Exception as e:
             print(f"   ❌ Erro na negociação IA ({cnpj}): {e}")

@@ -1083,7 +1083,7 @@ elif selected == "Configurações":
                             st.session_state.mostrar_qr = True
                             st.rerun()
 
-        if st.session_state.get('mostrar_qr') and status_conexao != "open":
+        if (st.session_state.get('mostrar_qr') or status_conexao == "connecting") and status_conexao != "open":
             st.markdown("---")
             st.markdown("#### 📱 Escaneie para Conectar")
             

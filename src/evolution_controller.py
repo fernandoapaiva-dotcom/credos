@@ -8,269 +8,179 @@ class EvolutionController:
     def __init__(self, config=None, nome_empresa_cliente=None):
         config = config or {}
         
-        # Prioritize Database config so user can change it via UI
+        # Prioritize Global API Key (AUTHENTICATION_API_KEY) from environment
+        global_key = os.getenv('AUTHENTICATION_API_KEY')
         url_raw = config.get('evo_url') or os.getenv('SERVER_URL') or ''
-        key_raw = config.get('evo_key') or os.getenv('AUTHENTICATION_API_KEY') or ''
+        key_raw = global_key or config.get('evo_key') or ''
         
         self.url = url_raw.strip().rstrip('/')
         if self.url and not self.url.startswith('http'):
             self.url = 'http://' + self.url
             
+        # Auto-correção para ambiente Docker (evita loop infinito de substituição)
+        for bad_host in ['localhost', 'evolution']:
+            if f"://{bad_host}:" in self.url or self.url.endswith(f"://{bad_host}"):
+                if os.path.exists('/.dockerenv'):
+                    self.url = self.url.replace(f"://{bad_host}", "://evolution_api")
+            
         self.apikey = key_raw.strip()
         
-        # Dinamismo para Multi-tenant: Limpeza rigorosa para bater com o padro de criao (CNPJ numrico)
+        # Dinamismo para Multi-tenant
         inst_raw = nome_empresa_cliente or os.getenv('INSTANCE_NAME') or "Credos_SaaS"
         self.instance = str(inst_raw).strip().replace(".", "").replace("-", "").replace("/", "").replace(" ", "").lower()
-        self.jid_cache = {} # Cache para evitar chamadas excessivas ao checkNumber
+        self.jid_cache = {}
         
-        # Log da configurao inicial para diagnstico
-        if not os.path.exists('/.dockerenv') or True: # Logar sempre no incio do debug
-             if os.name == 'nt': log_dir = r"C:\Antigravity\credos"
-             else: log_dir = os.path.join(os.getcwd(), "data")
-             log_file = os.path.join(log_dir, "EVO_DEBUG.txt")
-             if os.path.exists(log_dir):
-                 with open(log_file, "a") as f:
-                     f.write(f"--- [INIT] Instncia: {self.instance} | URL: {self.url} ---\n")
+        self.global_apikey = os.getenv('AUTHENTICATION_API_KEY') or config.get('evolution_api_key', '')
+        self.apikey = self.global_apikey # Forced for management operations
         
         self.headers = {
             "apikey": self.apikey,
             "Content-Type": "application/json"
         }
-
+        
     def debug_log(self, acao, endpoint, resposta, payload=None):
-        print(f"\n---  RASTREIO EVOLUTION ({acao}) ---")
-        print(f"URL: {endpoint}")
-        if payload: print(f"Payload Enviado: {payload if 'media' not in str(payload) else 'Mdia (Base64 Omitido)'}")
-        print(f"Status Code: {resposta.status_code}")
-        print(f"Resposta: {resposta.text}")
-        print("-" * 40 + "\n")
+        try:
+            print(f"\n---  RASTREIO EVOLUTION ({acao}) ---")
+            print(f"URL: {endpoint}")
+            if payload: print(f"Payload Enviado: {payload if 'media' not in str(payload) else 'Mídia (Base64 Omitido)'}")
+            print(f"Status Code: {resposta.status_code}")
+            print(f"Resposta: {resposta.text}")
+            print("-" * 40 + "\n")
+        except:
+            print(f"--- RASTREIO EVOLUTION ({acao}) - [Erro ao imprimir detalhes no console] ---")
 
     def checar_status(self):
-        # Caminho dinmico para logs (compatvel Linux/Windows)
-        if os.name == 'nt':
-            log_dir = r"C:\Antigravity\credos"
-        else:
-            log_dir = os.path.join(os.getcwd(), "data")
-        
-        os.makedirs(log_dir, exist_ok=True)
-        log_file = os.path.join(log_dir, "EVO_DEBUG.txt")
-        
         try:
-            # Auto-correo: se estiver rodando no Docker e usar localhost, muda para 'evolution_api'
-            if 'localhost' in self.url and os.path.exists('/.dockerenv'):
-                self.url = self.url.replace('localhost', 'evolution_api')
-                with open(log_file, "a") as f: f.write(f"[{self.instance}] Auto-corrigindo URL para: {self.url}\n")
-
-            if not self.url or not self.apikey: 
-                with open(log_file, "a") as f: f.write(f"[{self.instance}] Erro: URL ou Key ausente. URL='{self.url}' Key='{self.apikey}'\n")
-                return "config_error"
-            
             endpoint = f"{self.url}/instance/connectionState/{self.instance}"
-            # ... rest of check logic remains but with self.url updated
             r = requests.get(endpoint, headers=self.headers, timeout=10)
-            
-            with open(log_file, "a") as f: f.write(f"[{self.instance}] Resposta {r.status_code}: {r.text[:200]}\n")
-            
             if r.status_code == 200:
-                # Na V1 o json varia: pode ser { "instance": { "state": "..." } } ou { "state": "..." }
                 dados = r.json()
                 state = dados.get("instance", {}).get("state") or dados.get("state") or "disconnected"
                 return state
             elif r.status_code == 404:
                 return "disconnected"
-            
             return "error"
         except Exception as e:
-            with open(log_file, "a") as f: f.write(f"[{self.instance}] EXCEO Status: {str(e)}\n")
             return "error"
 
     def criar_instancia(self):
         try:
             endpoint = f"{self.url}/instance/create"
             payload = {
-                "instanceName": self.instance, 
-                "token": f"token_{self.instance}",
-                "qrcode": True,
-                "webhook": {
-                    "enabled": True,
-                    "url": "http://credos-backend:8001/api/webhook/evolution",
-                    "webhookByEvents": False,
-                    "webhookBase64": False,
-                    "events": [
-                        "MESSAGES_UPSERT",
-                        "CONNECTION_UPDATE"
-                    ]
-                },
-                "settings": {
-                    "reject_call": False,
-                    "groups_ignore": True,
-                    "always_online": True,
-                    "read_messages": True,
-                    "read_status": False,
-                    "sync_full_history": False
-                }
+                "instanceName": self.instance,
+                "token": self.instance + "-token",
+                "qrcode": True
             }
             r = requests.post(endpoint, json=payload, headers=self.headers, timeout=60)
             if r.status_code in [200, 201]: 
+                self.configurar_webhook()
+                self.configurar_settings()
                 return r.json()
-            elif r.status_code in [403, 409] and ("already in use" in r.text or "already" in r.text):
+            elif r.status_code in [403, 409]:
+                self.configurar_webhook()
+                self.configurar_settings()
                 return {"message": "already exists"}
-            else:
-                self.debug_log("Erro ao Criar", endpoint, r)
-                return {"error": r.text}
+            return {"error": r.text}
         except Exception as e:
             return {"error": str(e)}
+
+    def configurar_webhook(self):
+        try:
+            target_url = "http://credos-backend:8001/api/webhook/evolution"
+            endpoint = f"{self.url}/webhook/set/{self.instance}"
+            payload = {
+                "enabled": True,
+                "url": target_url,
+                "webhookByEvents": False,
+                "webhookBase64": False,
+                "events": ["MESSAGES_UPSERT", "CONNECTION_UPDATE", "MESSAGES_UPDATE", "SEND_MESSAGE"]
+            }
+            r = requests.post(endpoint, json=payload, headers=self.headers, timeout=20)
+            return r.status_code in [200, 201]
+        except: return False
+
+    def configurar_settings(self):
+        try:
+            endpoint = f"{self.url}/settings/set/{self.instance}"
+            payload = {
+                "reject_call": False,
+                "groups_ignore": False,
+                "always_online": True,
+                "read_messages": True,
+                "read_status": False,
+                "sync_full_history": False
+            }
+            r = requests.post(endpoint, json=payload, headers=self.headers, timeout=20)
+            return r.status_code in [200, 201]
+        except: return False
     
     def deletar_instancia(self):
         try:
-            endpoint = f"{self.url}/instance/logout/{self.instance}"
-            requests.delete(endpoint, headers=self.headers, timeout=5)
-            endpoint_del = f"{self.url}/instance/delete/{self.instance}"
-            r = requests.delete(endpoint_del, headers=self.headers, timeout=10)
+            requests.delete(f"{self.url}/instance/logout/{self.instance}", headers=self.headers, timeout=5)
+            r = requests.delete(f"{self.url}/instance/delete/{self.instance}", headers=self.headers, timeout=10)
             return r.status_code in [200, 201]
-        except Exception as e:
-            print(f"Erro ao deletar: {e}")
-            return False
+        except: return False
 
     def get_contact(self, jid: str):
-        """Busca detalhes de um contato (nome/nmero) a partir do JID (especialmente para @lid)."""
         try:
             import urllib.parse
-            # Em v1.8.2 a resoluo de JID exige encoding do caractere @ na URL
             jid_encoded = urllib.parse.quote(jid)
             endpoint = f"{self.url}/chat/contact/{self.instance}/{jid_encoded}"
             r = requests.get(endpoint, headers=self.headers, timeout=10)
-            if r.status_code == 200:
-                return r.json()
-            # Tenta um segundo endpoint comum em v1.8.2 (query param)
-            endpoint_alt = f"{self.url}/chat/fetchProfile/{self.instance}?number={jid_encoded}"
-            r_alt = requests.get(endpoint_alt, headers=self.headers, timeout=10)
-            if r_alt.status_code == 200:
-                return r_alt.json()
+            if r.status_code == 200: return r.json()
             return None
-        except Exception as e:
-            self.debug_log(f"Erro ao buscar contato {jid}", "", e)
-            return None
+        except: return None
 
     def buscar_jid_valido(self, numero):
-        """
-        Resolve o problema do 9º dígito no Brasil.
-        Consulta a Evolution API para descobrir o JID real (se existe com ou sem o 9).
-        """
-        # Limpa o número
+        if "@g.us" in str(numero): return numero
         num_clean = "".join(filter(str.isdigit, str(numero)))
         if not num_clean: return None
-        if len(num_clean) <= 11: num_clean = "55" + num_clean
-        
-        # JID padrão (com o número como enviado)
+        if len(num_clean) in [10, 11]: num_clean = "55" + num_clean
         jid_default = num_clean if "@" in num_clean else f"{num_clean}@s.whatsapp.net"
         
-        # Se for brasileiro, tentamos validar
         if num_clean.startswith("55"):
-            if num_clean in self.jid_cache:
-                return self.jid_cache[num_clean]
-            
+            if num_clean in self.jid_cache: return self.jid_cache[num_clean]
             try:
-                # Auto-correio URL para Docker
                 url_exec = self.url.replace('localhost', 'evolution_api') if 'localhost' in self.url and os.path.exists('/.dockerenv') else self.url
-                endpoint = f"{url_exec}/chat/whatsappNumber/{self.instance}"
-                
-                # Para números brasileiros, mandamos o número para verificação
+                endpoint = f"{url_exec}/chat/whatsappNumbers/{self.instance}"
                 test_numbers = [num_clean]
-                # Se for 13 dígitos (com o 9), também tentamos o 12 (sem o 9) se o primeiro falhar internamente
-                # mas o whatsappNumber geralmente resolve isso sozinho se mandarmos o de 13.
+                if len(num_clean) == 13 and num_clean[4] == '9': test_numbers.append(num_clean[:4] + num_clean[5:])
+                elif len(num_clean) == 12: test_numbers.append(num_clean[:4] + "9" + num_clean[4:])
                 
-                payload = {"numbers": test_numbers}
-                r = requests.post(endpoint, json=payload, headers=self.headers, timeout=15)
-                
-                # Log do checkNumber para diagnóstico de campo
-                self.debug_log("CHECK NUMBER", endpoint, r, payload)
-                
+                r = requests.post(endpoint, json={"numbers": list(set(test_numbers))}, headers=self.headers, timeout=15)
                 if r.status_code == 200:
-                    results = r.json()
-                    # A Evolution retorna uma lista de objetos na v1
-                    for res in results:
-                        if (res.get("exists") or res.get("status") == "exists") and res.get("jid"):
-                            valid_jid = res.get("jid")
-                            self.jid_cache[num_clean] = valid_jid
-                            return valid_jid
-                # Se não existir ou falhar, retorna o jid_default (melhor tentar do que abortar)
-            except Exception as e:
-                print(f"Erro ao validar número BR: {e}")
-        
+                    res = r.json()
+                    results = res if isinstance(res, list) else [res]
+                    for item in results:
+                        if (item.get("exists") or item.get("status") == "exists") and item.get("jid"):
+                            self.jid_cache[num_clean] = item.get("jid")
+                            return item.get("jid")
+            except: pass
         return jid_default
 
     def enviar_mensagem_texto(self, numero, mensagem):
         try:
             if not self.url or not self.apikey: return False
-            
-            if 'localhost' in self.url and os.path.exists('/.dockerenv'):
-                self.url = self.url.replace('localhost', 'evolution_api')
-
-            # Resolve JID (Lógica do 9º dígito inclusa)
             target = self.buscar_jid_valido(numero)
             if not target: return False
-            
             endpoint = f"{self.url}/message/sendText/{self.instance}"
             payload = {
                 "number": target,
-                "textMessage": {
-                    "text": mensagem
-                }
+                "textMessage": {"text": mensagem}
             }
-            
-            r = requests.post(endpoint, json=payload, headers=self.headers, timeout=20)
-            
-            if r.status_code not in [200, 201]:
-                self.debug_log("FALHA ENVIO TEXTO (V1)", endpoint, r, payload)
-                # Fallback: se o wrapper falhar, tenta o formato flat (alguns forks da v1 usam flat)
-                if r.status_code == 400:
-                    payload_flat = {"number": target, "text": mensagem}
-                    r = requests.post(endpoint, json=payload_flat, headers=self.headers, timeout=20)
-                    if r.status_code in [200, 201]: return True
-
-                return False
-            
-            # Log de sucesso para debug
-            if os.name == 'nt': log_dir = r"C:\Antigravity\credos"
-            else: log_dir = os.path.join(os.getcwd(), "data")
-            log_file = os.path.join(log_dir, "EVO_DEBUG.txt")
-            with open(log_file, "a") as f:
-                f.write(f"[{self.instance}] MENSAGEM ENVIADA para {target}: {mensagem[:50]}...\n")
-                
-            return True
-        except Exception as e:
-            # Registrar exceo no log
-            if os.name == 'nt': log_dir = r"C:\Antigravity\credos"
-            else: log_dir = os.path.join(os.getcwd(), "data")
-            log_file = os.path.join(log_dir, "EVO_DEBUG.txt")
-            with open(log_file, "a") as f:
-                f.write(f"[{self.instance}] EXCEO Envio Texto: {str(e)}\n")
+            r = requests.post(endpoint, json=payload, headers=self.headers, timeout=15)
+            if r.status_code in [200, 201]: return True
+            self.debug_log("FALHA ENVIO TEXTO (v1.8.2)", endpoint, r, payload)
             return False
         except Exception as e:
-            print(f"Erro Crtico WhatsApp Texto: {e}")
-            return False
-
-    def enviar_midia(self, numero, caminho):
-        try:
-            if not self.url or not self.apikey: return False
-            if not os.path.exists(caminho): return False
-            with open(caminho, "rb") as f:
-                b64 = base64.b64encode(f.read()).decode('utf-8')
-            mime, _ = mimetypes.guess_type(caminho)
-            return self.enviar_midia_b64(numero, b64, mime or "image/jpeg", os.path.basename(caminho))
-        except Exception as e:
-            print(f"Erro Crtico WhatsApp Mdia: {e}")
+            print(f"Erro Crítico WhatsApp Texto: {e}")
             return False
 
     def enviar_midia_b64(self, numero, b64, mimetype, filename="arquivo"):
         try:
             if not self.url or not self.apikey: return False
-            
-            # Resolve JID (Lógica do 9º dígito inclusa)
             target = self.buscar_jid_valido(numero)
             if not target: return False
-            
             endpoint = f"{self.url}/message/sendMedia/{self.instance}"
             mediatype = "document"
             if "image" in mimetype: mediatype = "image"
@@ -287,45 +197,19 @@ class EvolutionController:
                 }
             }
             r = requests.post(endpoint, json=payload, headers=self.headers)
-            
-            if r.status_code not in [200, 201]:
-                self.debug_log("FALHA ENVIO MÍDIA (V1)", endpoint, r, payload)
-                # Fallback flat
-                if r.status_code == 400:
-                    payload_flat = {"number": target, "mediatype": mediatype, "media": b64, "fileName": filename, "caption": filename}
-                    r = requests.post(endpoint, json=payload_flat, headers=self.headers)
-                    if r.status_code in [200, 201]: return True
-                return False
-            return True
-        except Exception as e:
-            print(f"Erro Crtico WhatsApp Mdia B64: {e}")
+            if r.status_code in [200, 201]: return True
+            self.debug_log("FALHA ENVIO MÍDIA", endpoint, r, payload)
             return False
+        except: return False
 
-    def buscar_qrcode(self):
-        """Busca o QR Code sincronicamente da V1."""
-        if os.name == 'nt': data_dir = r"C:\Antigravity\credos"
-        else: data_dir = os.path.join(os.getcwd(), "data")
-        log_file = os.path.join(data_dir, "EVO_DEBUG.txt")
-
+    def buscar_detalhes_grupo(self, group_jid: str):
         try:
-            endpoint = f"{self.url}/instance/connect/{self.instance}"
-            r = requests.get(endpoint, headers=self.headers, timeout=10)
-            
-            with open(log_file, "a") as f:
-                f.write(f"[{self.instance}] V1 QR Status: {r.status_code}\n")
-
-            if r.status_code == 200:
-                dados = r.json()
-                qr = dados.get('base64') or dados.get('qrcode', {}).get('base64')
-                
-                if qr and isinstance(qr, str) and len(qr) > 50:
-                    if not qr.startswith('data:image'):
-                        qr = f"data:image/png;base64,{qr}"
-                    return qr
-                
-                # Se for s a string direta { "qrcode": "..." } ou erro count
-                # ignorar. A V1 manda no base64
-            
+            if not self.url or not self.apikey or not group_jid: return None
+            url_exec = self.url.replace('localhost', 'evolution_api') if 'localhost' in self.url and os.path.exists('/.dockerenv') else self.url
+            endpoint = f"{url_exec}/group/findGroupInfos/{self.instance}?groupJid={group_jid}"
+            r = requests.get(endpoint, headers=self.headers, timeout=20)
+            if r.status_code == 200 and r.text.strip():
+                data = r.json()
+                return data[0] if isinstance(data, list) and len(data) > 0 else data
             return None
-        except Exception as e:
-            return None
+        except: return None

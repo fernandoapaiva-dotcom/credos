@@ -56,12 +56,24 @@ def executar_rotina_de_cobranca():
             # Converte os nomes dos dias para números
             dias_numeros = [DIAS_MAP[d] for d in dias_configurados if d in DIAS_MAP]
             
-            # Se HOJE não for dia de cobrança OU não for a hora exata, pula
+            # Se HOJE não for dia de cobrança, pula
             if dia_semana_hoje not in dias_numeros:
                 continue
                 
-            if hora_atual != hora_configurada:
-                continue
+            # Verifica se está dentro da janela de 10 minutos do horário configurado
+            try:
+                # Converte strings de horário para objetos datetime para comparação segura
+                ref_dt = datetime.datetime.strptime(hora_configurada, "%H:%M")
+                now_dt = datetime.datetime.strptime(hora_atual, "%H:%M")
+                diff_min = (now_dt - ref_dt).total_seconds() / 60
+                
+                # Se ainda não chegou a hora ou se já passaram mais de 10 minutos, pula
+                if not (0 <= diff_min <= 10):
+                    continue
+            except Exception as e:
+                print(f"⚠️ Erro ao validar janela de horário para {nome_empresa}: {e}")
+                if hora_atual != hora_configurada:
+                    continue
             
             # --- INÍCIO DA EXECUÇÃO ---
             logging.info(f"🚀 Iniciando rotina para: {nome_empresa}")

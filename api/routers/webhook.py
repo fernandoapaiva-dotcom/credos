@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Request, Header, HTTPException
 from src.database import conectar, carregar_configuracoes_db, carregar_todas_unidades_db
+from src.group_history import salvar_mensagem_contexto, obter_contexto_grupo
 from src.rag_negotiator import RAGNegotiator
 from src.evolution_controller import EvolutionController
 from src.manager import Manager
@@ -40,6 +41,17 @@ def _log_webhook(msg: str, level="INFO"):
         print(f"Erro Crítico ao salvar log: {e}")
 
 _log_webhook("MODULO WEBHOOK CARREGADO - Sistema de Auditoria Online")
+
+# Configuração Central de Modelo (Sempre o Latest conforme pedido pelo USER)
+GEMINI_MODEL_LATEST = "gemini-flash-latest"
+
+def sanitizar_texto_ia(texto: str) -> str:
+    """Remove padrões de Gemini API Keys do texto para evitar bloqueios de 'leaked key'."""
+    if not texto: return ""
+    import re
+    # Padrao comum das chaves: AQ. seguido de muitos caracteres alfanumericos e hifens/underscores
+    padrao = r'AQ\.[a-zA-Z0-9_\-]{30,}'
+    return re.sub(padrao, '[CHAVE_CONFIDENCIAL]', texto)
 
 async def _timeout_concierge(op_num_limpo: str, cliente_nome: str, num_cliente: str,
                               cnpj: str, session_id: int, info_debito: dict,
@@ -174,88 +186,178 @@ async def receber_webhook_evolution(request: Request):
             return {"status": "ignored"}
 
         event = str(payload.get("event", "")).lower()
-        _log_webhook(f"Processando Evento: '{event}'")
-        
         if event not in ["messages.upsert", "message.upsert", "messages_upsert"]:
-            _log_webhook(f"Evento '{event}' ignorado.")
             return {"status": "ignored"}
 
         data = payload.get("data", {})
         key = data.get("key", {})
-        
         instance_name = payload.get("instance")
         remote_jid = key.get("remoteJid", "")
         
-        # Lógica especial para IDs @lid (WhatsApp Beta/Multi-device)
-        # Tenta resolver o número real via Evolution API se for um LID
-        if "@lid" in remote_jid:
-            _log_webhook(f"ID @lid detectado ({remote_jid}). Solicitando resolução à Evolution...")
-            try:
-                # Carrega config para ter a API Key
-                unidades = carregar_todas_unidades_db()
-                u_target = unidades[0] # Pega a primeira por padrão para a Controller
-                for u in unidades:
-                    if u['empresa_cnpj'] == (instance_name or ""): 
-                        u_target = u
-                        break
-                
-                cfg_temp = carregar_configuracoes_db(u_target['empresa_cnpj'])
-                evo_temp = EvolutionController(config=cfg_temp, nome_empresa_cliente=instance_name)
-                
-                # Tenta buscar do participant (que v1 as vezes já traz limpo)
-                participante = (data.get("participant") or key.get("participant") or "").split("@")[0]
-                if participante and len(participante) > 8 and not participante.startswith("198"):
-                    numero_raw = participante
-                    _log_webhook(f"Número resolvido via HEURÍSTICA participant: {numero_raw}")
-                else:
-                    # RESOLUÇÃO OFICIAL: Pergunta para a Evolution
-                    _log_webhook(f"Iniciando Resolução Oficial via API para: {remote_jid}")
-                    contato = evo_temp.get_contact(remote_jid)
-                    if contato and contato.get('number'):
-                        numero_raw = str(contato.get('number')).split("@")[0]
-                        _log_webhook(f"Número resolvido via API: {numero_raw}")
-                    else:
-                        numero_raw = remote_jid.split("@")[0]
-                        # Fallback por pushName para testes (Fernando)
-                        push_name = data.get("pushName", "")
-                        _log_webhook(f"DEBUG: pushName extraído do data: '{push_name}'")
-                        if "Fernando" in push_name or "Fernando" in str(payload.get("pushName", "")):
-                            _log_webhook(f"ALERTA: Resolução falhou, mas pushName identificado como '{push_name}'. Forçando número real para testes.")
-                            # Força o número real do Fernando para o banco de dados e para o envio funcionar
-                            numero_raw = "5561998334833"
-                            remote_jid = "5561998334833@s.whatsapp.net"
-                        _log_webhook(f"Fim da resolução. ID/Número usado: {numero_raw}")
-            except Exception as e:
-                _log_webhook(f"Erro ao tentar resolver LID: {e}", "ERROR")
-                numero_raw = remote_jid.split("@")[0]
-        else:
-            numero_raw = remote_jid.split("@")[0]
-            
-        _log_webhook(f"--- NOVA MENSAGEM RECEBIDA: {numero_raw} (Instância: {instance_name}, Evento: {event}) ---")
-
-        if key.get("fromMe", False):
-            _log_webhook("Ignorando mensagem enviada por mim mesmo.")
+        # ─── FASE 0.1: BLOQUEIO DE AUTO-RESPOSTA (ANTI-LOOP) ──────
+        if key.get("fromMe") is True:
+            _log_webhook("MENSAGEM PRÓPRIA (fromMe) - Ignorando para evitar loop.")
             return {"status": "ignored"}
-
-        # Deduplicação: ignora se já processamos este ID de mensagem
-        msg_id = key.get("id", "")
-        if msg_id and msg_id in _processed_message_ids:
-            _log_webhook(f"Mensagem {msg_id} já processada por outra instância. Ignorando.")
-            return {"status": "ignored"}
-        if msg_id:
-            _processed_message_ids.add(msg_id)
-            if len(_processed_message_ids) > _MAX_IDS_CACHE:
-                # Remove os mais antigos
-                oldest = list(_processed_message_ids)[:100]
-                for old_id in oldest:
-                    _processed_message_ids.discard(old_id)
 
         msg = data.get("message", {})
         texto = (msg.get("conversation") or 
                  msg.get("extendedTextMessage", {}).get("text") or "").strip()
-        _log_webhook(f"Texto extraído: \"{texto}\"")
 
-        # ─── 1. VERIFICAR SE É COMANDO DO OPERADOR ────────────────────
+        # ─── FASE 0.2: BLOQUEIO DE AUTO-RESPOSTA ENTRE INSTÂNCIAS (BOT x BOT) ──────
+        if "*Analu - Assistente Virtual*" in texto:
+            _log_webhook("MENSAGEM DE OUTRA INSTÂNCIA DA ANALU - Ignorando para evitar loop entre agentes.")
+            return {"status": "ignored"}
+
+        # ─── FASE 0: DETECÇÃO PRIORITÁRIA DO GRUPO DE RELATÓRIO ──────
+        GRUPO_RELATORIO_ID = "120363409818857510@g.us"
+        
+        if remote_jid == GRUPO_RELATORIO_ID:
+            _log_webhook(f"MENSAGEM NO GRUPO DE RELATÓRIO: {texto[:100]}")
+            
+            # Recupera contexto recente do grupo
+            contexto_recente = obter_contexto_grupo(remote_jid)
+            
+            # FILTRAGEM AGUDA: Analu só responde no grupo se for CITADA nominalmente
+            # Isso evita que ela fique 'escutando' conversas paralelas ou responda a si mesma
+            chamou_analu = "analu" in texto.lower()
+            
+            if chamou_analu:
+                _log_webhook("Analu citada nominalmente no grupo. Iniciando processamento...")
+                
+                # Salva o input do usuário no contexto
+                salvar_mensagem_contexto(remote_jid, "user", texto)
+                
+                try:
+                    # Passo 1: Infra e Config
+                    unidades_disponiveis = carregar_todas_unidades_db() or []
+                    cfg_temp = carregar_configuracoes_db(instance_name)
+                    api_key_gemini = cfg_temp.get('gemini_api_key')
+                    
+                    if not api_key_gemini:
+                        for u in unidades_disponiveis:
+                            c_alt = carregar_configuracoes_db(u['empresa_cnpj'])
+                            if c_alt.get('gemini_api_key'):
+                                api_key_gemini = c_alt['gemini_api_key']
+                                break
+                    
+                    if not api_key_gemini:
+                        raise ValueError("CHAVE_GEMINI_AUSENTE")
+
+                    # Passo 2: Inicialização
+                    from google import genai
+                    client = genai.Client(api_key=api_key_gemini)
+                    from src.evolution_controller import EvolutionController
+                    evo_temp = EvolutionController(config=cfg_temp, nome_empresa_cliente=instance_name)
+
+                    # Passo 3: Prompt Sistêmico com Capacidade de Ação (Agentic)
+                    prompt_sistema = f"""Você é a Analu, assistente virtual inteligente do Credos System.
+                    Você está em um grupo de supervisores financeiros.
+                    
+                    HISTÓRICO RECENTE DO GRUPO:
+                    {json.dumps(contexto_recente, ensure_ascii=False)}
+                    
+                    MENSAGEM ATUAL: "{texto}"
+                    
+                    CAPACIDADES:
+                    1. RESPONDER DÚVIDAS: Use o histórico de negociação de clientes se solicitado.
+                    2. EXECUTAR AÇÕES (NOVO!): Se o supervisor pedir para você falar com um cliente ou cobrar alguém, retorne um JSON no seguinte formato:
+                       {{"action": "send_message", "client_name": "NOME_DO_CLIENTE", "text_to_send": "MENSAGEM_PRO_CLIENTE"}}
+                    
+                    REGRAS:
+                    - Se for apenas uma conversa ou dúvida, responda normalmente em texto.
+                    - Se for um comando de ação, retorne APENAS o JSON da ação.
+                    - Seja profissional, curta e direta.
+                    """
+                    
+                    res_ia = client.models.generate_content(model=GEMINI_MODEL_LATEST, contents=prompt_sistema)
+                    resposta_texto = res_ia.text.strip()
+                    _log_webhook(f"IA gerou resposta no grupo: {resposta_texto[:100]}")
+
+                    # Passo 4: Executor de Ações (Agentic Logic)
+                    if '{"action":' in resposta_texto:
+                        try:
+                            # Tenta extrair o JSON puro (o Gemini as vezes coloca markdown)
+                            json_match = re.search(r'\{.*\}', resposta_texto, re.DOTALL)
+                            if json_match:
+                                action_data = json.loads(json_match.group())
+                                if action_data.get("action") == "send_message":
+                                    cliente_alvo = action_data.get("client_name")
+                                    msg_para_cliente = action_data.get("text_to_send")
+                                    
+                                    _log_webhook(f"AGENTE: Executando envio para {cliente_alvo}")
+                                    
+                                    sucesso_envio = False
+                                    # Busca o número do cliente em todas as unidades
+                                    for u_item in unidades_disponiveis:
+                                        conn_u = conectar(u_item['empresa_cnpj'])
+                                        cli_row = conn_u.cursor().execute(
+                                            "SELECT whatsapp, nome FROM clientes WHERE nome LIKE ? OR cnpj LIKE ? LIMIT 1",
+                                            (f"%{cliente_alvo}%", f"%{cliente_alvo}%")
+                                        ).fetchone()
+                                        conn_u.close()
+                                        
+                                        if cli_row and cli_row[0]:
+                                            try:
+                                                from src.manager import Manager
+                                                mgr = Manager(u_item['empresa_cnpj'])
+                                                # Dispara a régua de cobrança completa (com títulos, atrasos, multas e PDF)
+                                                if mgr.cobrar_cliente_especifico(cli_row[1], canais_selecionados=['WhatsApp']):
+                                                    sucesso_envio = True
+                                                    resposta_final_grupo = f"Certinho! ✅ Já disparei a cobrança atualizada (com todos os títulos pendentes, dias de atraso e valores corridos) para a carteira de *{cli_row[1]}*."
+                                                    break
+                                            except Exception as e_mgr:
+                                                _log_webhook(f"Erro ao disparar cobrança rica via webhook: {e_mgr}", "ERROR")
+                                    
+                                    if not sucesso_envio:
+                                        resposta_final_grupo = f"⚠️ Não consegui localizar o número do WhatsApp para o cliente '{cliente_alvo}' em nenhuma unidade."
+                        except Exception as e_json:
+                            _log_webhook(f"Erro ao processar JSON de ação: {e_json}", "ERROR")
+                            resposta_final_grupo = "Ops! Tentei realizar a ação mas o comando veio formatado de um jeito que não entendi."
+                    else:
+                        # Resposta Conversacional Normal - Sanitiza para evitar leak de JSON
+                        resposta_final_grupo = re.sub(r'\{.*"action":.*\}', '', resposta_texto, flags=re.DOTALL).strip()
+                        if not resposta_final_grupo:
+                            resposta_final_grupo = "Entendido! Estou processando as informações."
+
+                    # Passo 5: Adição da Assinatura e Envio para o Grupo
+                    # --- NÃO ALTERAR: INTERAÇÃO DA ANALU BLINDADA CONFORME SOLICITAÇÃO DO USUÁRIO ---
+                    # Esta estrutura garante a identidade visual da Analu no grupo de relatórios.
+                    resposta_com_assinatura = f"*Analu - Assistente Virtual*\n\n{resposta_final_grupo}"
+                    
+                    evo_temp.enviar_mensagem_texto(remote_jid, resposta_com_assinatura)
+                    salvar_mensagem_contexto(remote_jid, "model", resposta_final_grupo)
+                    # ------------------------------------------------------------------------------
+
+                except Exception as e_grp:
+                    _log_webhook(f"❌ FALHA NO GRUPO: {e_grp}", "ERROR")
+                    evo_temp.enviar_mensagem_texto(remote_jid, f"*Analu - Assistente Virtual*\n\n⚠️ Desculpe, tive um probleminha técnico agora: {str(e_grp)[:50]}")
+            else:
+                # Se for apenas uma mensagem no grupo sem chamar ela (e ela não foi a última), apenas salva no contexto silenciosamente
+                salvar_mensagem_contexto(remote_jid, "user", texto)
+            
+            return {"status": "ok"}
+
+        # ─── FASE 1: FILTRO fromMe & DEDUPLICAÇÃO ───────────────────
+        if key.get("fromMe", False):
+            return {"status": "ignored"}
+
+        msg_id = key.get("id", "")
+        if msg_id and msg_id in _processed_message_ids:
+            return {"status": "ignored"}
+        if msg_id:
+            _processed_message_ids.add(msg_id)
+            if len(_processed_message_ids) > _MAX_IDS_CACHE:
+                _processed_message_ids.clear()
+
+        # ─── FASE 2: RESOLUÇÃO DE NÚMERO (LID) ──────────────────────
+        if "@lid" in remote_jid:
+            numero_raw = remote_jid.split("@")[0] 
+        else:
+            numero_raw = remote_jid.split("@")[0]
+
+        _log_webhook(f"--- MENSAGEM PRIVADA: {numero_raw} | Texto: {texto[:50]} ---")
+
+        # ─── FASE 3: COMANDOS DO OPERADOR ────────────────────────────
         unidades = carregar_todas_unidades_db()
         for u in unidades:
             config_op = carregar_configuracoes_db(u['empresa_cnpj'])

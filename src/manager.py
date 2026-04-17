@@ -221,29 +221,29 @@ class Manager:
         dias_max_atraso = max([it.get('dias_atraso', 0) for it in itens]) if itens else 0
         restante_cartorio = prazo_cartorio_config - dias_max_atraso
         
-        msg = f"{saudacao}, {contato}.\n\n"
+        msg = f"{saudacao}, {contato}.\nSou a *Analu*, assistente financeira da *{self.config.get('empresa_nome', 'empresa')}*.\n\n"
         
         if has_cartorio:
-            msg += f" *NOTIFICAO DE TTULO EM CARTRIO*\n\n"
-            msg += f"Informamos que os dbitos abaixo em nome de *{nome_cliente}* j se encontram em processo de **PROTESTO/CARTRIO** devido ao tempo de atraso.\n\n"
+            msg += f" *NOTIFICAÇÃO DE TÍTULO EM CARTÓRIO*\n\n"
+            msg += f"Informamos que os débitos abaixo em nome de *{nome_cliente}* já se encontram em processo de **PROTESTO/CARTÓRIO** devido ao tempo de atraso.\n\n"
         else:
-            msg += f"Identificamos pendncias financeiras em aberto em nome de *{nome_cliente}*.\n\n"
+            msg += f"Gostaria de tratar sobre a regularização das suas pendências financeiras em aberto conosco.\n\n"
         
-        # Avisos de prazo (apenas se no estiver em cartrio ou se houver outros a vencer)
+        # Avisos de prazo (apenas se não estiver em cartório ou se houver outros a vencer)
         if not has_cartorio:
             if restante_cartorio > 5:
-                msg += f" *Aviso:* Faltam {restante_cartorio} dias para o incio do processo de negativao/cartrio.\n"
+                msg += f" *Aviso:* Faltam {restante_cartorio} dias para o início do processo de negativação/cartório.\n"
             elif 1 < restante_cartorio <= 5:
-                msg += f" *ALERTA URGENTE:* Faltam apenas *{restante_cartorio} dias* para o envio automtico deste dbito ao *CARTRIO*.\n"
+                msg += f" *ALERTA URGENTE:* Faltam apenas *{restante_cartorio} dias* para o envio automático deste débito ao *CARTÓRIO*.\n"
             elif restante_cartorio == 1:
-                msg += f" *NOTIFICAO FINAL:* Seu ttulo ser instrudo para *CARTRIO AMANH*.\n"
+                msg += f" *NOTIFICAÇÃO FINAL:* Seu título será instruído para *CARTÓRIO AMANHÃ*.\n"
             elif restante_cartorio == 0:
-                msg += f" *PRAZO ESGOTADO:* O ttulo atingiu o prazo limite e o processo de *CARTRIO* ser iniciado HOJE.\n"
+                msg += f" *PRAZO ESGOTADO:* O título atingiu o prazo limite e o processo de *CARTÓRIO* será iniciado HOJE.\n"
         
         if has_cartorio:
-            msg += f" *Ateno:* Ttulos em cartrio geram restries imediatas ao crdito e custos adicionais operacionais.\n"
+            msg += f" *Atenção:* Títulos em cartório geram restrições imediatas ao crédito e custos adicionais operacionais.\n"
 
-        msg += f"\n *Detalhamento dos Ttulos:*\n"
+        msg += f"\n *Detalhamento dos Títulos:*\n"
         
         for item in itens:
             msg += f" *NF {item['numero_nf']}* | Venc: {item['vencimento']} ({item['dias_atraso']} dias de atraso)\n"
@@ -255,13 +255,13 @@ class Manager:
         msg += f" *VALOR TOTAL ATUALIZADO:* R$ {total:,.2f}\n\n"
         
         if has_cartorio:
-            msg += f" *INSTRUES DE REGULARIZAO:*\n"
-            msg += f"1. O pagamento do valor acima deve ser feito  nossa empresa para quitao do dbito.\n"
-            msg += f"2. As **taxas de cartrio** devero ser pagas por sua empresa **diretamente ao tabelionato**.\n"
-            msg += f"3. Aps confirmarmos seu pagamento, emitiremos a **CARTA DE ANUNCIA** digital para que voc possa baixar o protesto imediatamente.\n\n"
-            msg += f"Gentileza tratar este assunto com a mxima prioridade.\n\n"
+            msg += f" *INSTRUÇÕES DE REGULARIZAÇÃO:*\n"
+            msg += f"1. O pagamento do valor acima deve ser feito à nossa empresa para quitação do débito.\n"
+            msg += f"2. As **taxas de cartório** deverão ser pagas por sua empresa **diretamente ao tabelionato**.\n"
+            msg += f"3. Após confirmarmos seu pagamento, emitiremos a **CARTA DE ANUÊNCIA** digital para que você possa baixar o protesto imediatamente.\n\n"
+            msg += f"Gentileza tratar este assunto com a máxima prioridade.\n\n"
         else:
-            msg += f"Gentileza entrar em contato para regularizao.\n\n"
+            msg += f"Gentileza entrar em contato para regularização.\n\n"
         
         return msg
 
@@ -291,11 +291,24 @@ class Manager:
         
         import zipfile
         zip_name = f"faturas_{cliente_nome.replace(' ', '_')}_{datetime.now().strftime('%H%M%S')}.zip"
-        with zipfile.ZipFile(zip_name, 'w') as z:
-            for f in arquivos_temp:
-                z.write(f, os.path.basename(f))
-        
-        return zip_name, arquivos_temp
+        try:
+            with zipfile.ZipFile(zip_name, 'w') as z:
+                for f in arquivos_temp:
+                    if f and os.path.exists(f):
+                        z.write(f, os.path.basename(f))
+                    else:
+                        print(f"   [AVISO] Arquivo nao encontrado para o ZIP: {f}")
+            
+            # Se o ZIP estiver vazio (nenhum arquivo existia de fato), deletamos e retornamos None
+            if os.path.exists(zip_name) and os.path.getsize(zip_name) < 50: # Um ZIP vazio tem ~22 bytes
+                os.remove(zip_name)
+                return None, []
+                
+            return zip_name, arquivos_temp
+        except Exception as e_zip:
+            print(f"Erro ao gerar arquivo ZIP: {e_zip}")
+            if os.path.exists(zip_name): os.remove(zip_name)
+            return None, []
 
     def executar_processo_completo_cobranca(self, cliente_nome, msg, zip_path, itens, arquivos_temp, canais_selecionados=None, cli_direct=None):
         if canais_selecionados is None: canais_selecionados = ["whatsapp", "email"]
@@ -691,3 +704,118 @@ class Manager:
 
     # Alias for backward compatibility
     gerar_relatorio_pdf = gerar_relatorio_pdf_cobrancas
+
+    def gerar_relatorio_pdf_operacao_diaria(self, data_alvo=None):
+        """Gera um PDF sumarizado das cobrancas do dia para enviar ao grupo da diretoria."""
+        if not data_alvo:
+            data_alvo = datetime.now().strftime("%Y-%m-%d")
+            
+        conn = conectar(self.cnpj_empresa)
+        conf = carregar_configuracoes_db(self.cnpj_empresa)
+        empresa_nome = conf.get('empresa_nome', 'Credos System')
+        
+        pdf = FPDF()
+        pdf.add_page("P") # Portrait
+        
+        # --- CABEÇALHO ---
+        pdf.set_fill_color(0, 51, 102) # Dark Blue
+        pdf.rect(0, 0, 210, 40, 'F')
+        
+        credos_logo = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'logo.png')
+        if os.path.exists(credos_logo):
+            try: pdf.image(credos_logo, 10, 8, h=12)
+            except: pass
+            
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_font("Arial", 'B', 16)
+        pdf.set_y(10)
+        pdf.cell(0, 8, str(empresa_nome).upper(), 0, 1, 'R')
+        pdf.set_font("Arial", '', 10)
+        pdf.cell(0, 6, f"RELATÓRIO EXECUTIVO DE OPERAÇÃO DIÁRIA", 0, 1, 'R')
+        
+        data_br = datetime.strptime(data_alvo, "%Y-%m-%d").strftime("%d/%m/%Y")
+        pdf.set_font("Arial", 'I', 9)
+        pdf.cell(0, 5, f"Data da Operação: {data_br} | Gerado em: {datetime.now().strftime('%d/%m/%Y %H:%M')}", 0, 1, 'R')
+        
+        # --- RESUMO EXECUTIVO ---
+        pdf.set_y(45)
+        pdf.set_text_color(0, 0, 0)
+        pdf.set_font("Arial", 'B', 12)
+        pdf.cell(0, 8, "RESUMO DE PERFORMANCE", 0, 1, 'L')
+        pdf.line(10, 53, 200, 53)
+        pdf.ln(2)
+        
+        # Correção da Query: Busca flexível por tipos de envio para incluir 'WhatsApp/Email'
+        query = f"SELECT cliente, tipo_envio, status, detalhes, usuario FROM logs_envio WHERE data_envio LIKE '{data_alvo}%' AND (tipo_envio LIKE '%Email%' OR tipo_envio LIKE '%WhatsApp%' OR tipo_envio LIKE '%IA%')"
+        
+        try:
+            df = pd.read_sql_query(query, conn)
+            
+            total_envios = len(df)
+            sucessos = len(df[df['status'] == 'Sucesso'])
+            falhas = total_envios - sucessos
+            taxa = (sucessos / total_envios * 100) if total_envios > 0 else 0
+            
+            pdf.set_font("Arial", 'B', 10)
+            pdf.cell(60, 10, f"TOTAL DE ACIONAMENTOS", 1, 0, 'C')
+            pdf.cell(60, 10, f"ENTREGUES COM SUCESSO", 1, 0, 'C')
+            pdf.cell(70, 10, f"TAXA DE EFICIÊNCIA", 1, 1, 'C')
+            
+            pdf.set_font("Arial", 'B', 14)
+            pdf.cell(60, 12, f"{total_envios}", 1, 0, 'C')
+            pdf.set_text_color(0, 128, 0) if sucessos > 0 else None
+            pdf.cell(60, 12, f"{sucessos}", 1, 0, 'C')
+            pdf.set_text_color(0, 0, 0)
+            pdf.cell(70, 12, f"{taxa:.1f}%", 1, 1, 'C')
+            
+            pdf.ln(8)
+            
+            pdf.set_font("Arial", 'B', 12)
+            pdf.cell(0, 8, "DETALHAMENTO POR CLIENTE", 0, 1, 'L')
+            pdf.ln(2)
+            
+            if total_envios > 0:
+                pdf.set_fill_color(230, 230, 230)
+                pdf.set_font("Arial", 'B', 8)
+                pdf.cell(60, 7, " CLIENTE", 1, 0, 'L', fill=True)
+                pdf.cell(25, 7, "CANAL", 1, 0, 'C', fill=True)
+                pdf.cell(25, 7, "STATUS", 1, 0, 'C', fill=True)
+                pdf.cell(80, 7, "DETALHES / NFS", 1, 1, 'L', fill=True)
+                
+                pdf.set_font("Arial", '', 7)
+                fill = False
+                for _, r in df.iterrows():
+                    cliente = str(r.get('cliente', ''))[:35]
+                    canal = str(r.get('tipo_envio', ''))
+                    status = str(r.get('status', ''))
+                    det_raw = str(r.get('detalhes', ''))
+                    det = self._humanizar_detalhes(det_raw).replace('\n', ' ')
+                    
+                    if status == "Falha": pdf.set_text_color(200, 0, 0)
+                    else: pdf.set_text_color(0, 0, 0)
+                    
+                    pdf.cell(60, 6, f" {cliente}", 1, 0, 'L', fill=fill)
+                    pdf.cell(25, 6, canal, 1, 0, 'C', fill=fill)
+                    pdf.cell(25, 6, status, 1, 0, 'C', fill=fill)
+                    pdf.cell(80, 6, f" {det[:60]}", 1, 1, 'L', fill=fill)
+                    fill = not fill
+                pdf.set_text_color(0, 0, 0)
+            else:
+                pdf.set_font("Arial", 'I', 10)
+                pdf.cell(0, 10, "Nenhuma atividade financeira registrada hoje.", 0, 1, 'C')
+        except Exception as e:
+            pdf.set_font("Arial", 'B', 10)
+            pdf.set_text_color(255, 0, 0)
+            pdf.cell(0, 10, f"Erro ao consolidar dados: {e}", 0, 1, 'L')
+        finally:
+            conn.close()
+            
+        pdf.set_y(-20)
+        pdf.set_font("Arial", 'I', 8)
+        pdf.set_text_color(100, 100, 100)
+        pdf.cell(0, 10, "Credos System - Analu AI | Tecnologia Avançada de Cobrança", 0, 0, 'C')
+            
+        pdf_path = f"temp_data/relatorio_diario_{self.cnpj_empresa}_{datetime.now().strftime('%H%M')}.pdf"
+        os.makedirs("temp_data", exist_ok=True)
+        pdf.output(pdf_path)
+        return pdf_path

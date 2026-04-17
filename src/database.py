@@ -14,7 +14,7 @@ def _get_default_logo():
     return ""
 
 # Configuração de diretório (suporte para Docker)
-DATABASE_DIR = os.getenv("DATABASE_DIR", ".")
+DATABASE_DIR = os.getenv("DATABASE_DIR", "/app/data")
 if not os.path.exists(DATABASE_DIR):
     os.makedirs(DATABASE_DIR, exist_ok=True)
 
@@ -28,6 +28,7 @@ def conectar(cnpj=None):
         safe_cnpj = str(cnpj).replace('.', '').replace('/', '').replace('-', '').strip()
         db_path = os.path.join(DATABASE_DIR, f"{DB_PREFIX}{safe_cnpj}.db")
         conn = sqlite3.connect(db_path, timeout=30)
+        conn.row_factory = sqlite3.Row
         # Verifica se as tabelas fundamentais existem
         c = conn.cursor()
         try:
@@ -41,7 +42,10 @@ def conectar(cnpj=None):
         except:
             _criar_tabelas_empresa(conn)
         return conn
-    return sqlite3.connect(CENTRAL_DB_NAME)
+        
+    conn = sqlite3.connect(CENTRAL_DB_NAME)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 def _verificar_migracoes_config(conn):
     """Garante que as colunas de regras financeiras existam na tabela config."""
@@ -279,6 +283,16 @@ def inicializar_banco():
         endereco TEXT,
         last_update TEXT
     )''')
+    
+    # Tabela de Configuração Global Mestre
+    c.execute('''CREATE TABLE IF NOT EXISTS config_global (
+        id INTEGER PRIMARY KEY DEFAULT 1,
+        grupo_relatorio_jid TEXT,
+        webhook_url TEXT
+    )''')
+    
+    # Init row if not exists
+    c.execute("INSERT OR IGNORE INTO config_global (id, grupo_relatorio_jid) VALUES (1, NULL)")
     
     # Usuário Admin Padrão
     if c.execute("SELECT count(*) FROM usuarios").fetchone()[0] == 0:
