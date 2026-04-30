@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Layout } from '../components/ui/Layout';
 import { useAuth, api } from '../context/AuthContext';
-import { Save, RefreshCw, QrCode, PowerOff, Loader2, Sparkles, Upload, Image as ImageIcon, X } from 'lucide-react';
+import { Save, RefreshCw, QrCode, PowerOff, Loader2, Sparkles, Upload, Image as ImageIcon, X, AlertTriangle, Play, Users } from 'lucide-react';
 
 export const Settings: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'dados' | 'whatsapp' | 'email' | 'ia'>('dados');
@@ -16,6 +16,7 @@ export const Settings: React.FC = () => {
   const [waCheckingStatus, setWaCheckingStatus] = useState(false);
   const [waGeneratingQr, setWaGeneratingQr] = useState(false);
   const [waDisconnecting, setWaDisconnecting] = useState(false);
+  const [creatingGroup, setCreatingGroup] = useState(false);
 
   // Tab: Dados e Regras
   const [config, setConfig] = useState<any>({});
@@ -24,25 +25,24 @@ export const Settings: React.FC = () => {
   const [waStatus, setWaStatus] = useState<string>('desconhecido');
   const [waQrCode, setWaQrCode] = useState<string | null>(null);
 
-  // Tab: Proactive
-  const [proactiveStatus, setProactiveStatus] = useState<any>({ total_documentos: 0 });
-  const [indexingHistory, setIndexingHistory] = useState(false);
-
   // Tab: IA
   const [scheduler, setScheduler] = useState<any>({ dias: [], hora: '09:00', ignorar_feriados: true, ativo: false });
+  const [systemHalt, setSystemHalt] = useState(false);
+  const [togglingHalt, setTogglingHalt] = useState(false);
+  const [proactiveStatus, setProactiveStatus] = useState<any>({ total_documentos: 0 });
+  const [indexingHistory, setIndexingHistory] = useState(false);
 
   const { updateCompanyLogo } = useAuth();
 
   useEffect(() => {
-    // Read the current selected company from local storage implicitly or state
     const cnpj = localStorage.getItem('companyCnpj');
     if (cnpj) {
       setCompanyCnpj(cnpj);
       loadConfigs(cnpj);
       loadScheduler(cnpj);
       loadProactiveStatus(cnpj);
+      loadSystemHalt();
       
-      // Auto check WhatsApp status on load
       const checkInitialStatus = async () => {
         try {
           const res = await api.post(`/companies/${cnpj}/whatsapp/status`);
@@ -83,13 +83,33 @@ export const Settings: React.FC = () => {
       setProactiveStatus(res.data);
     } catch (e) { }
   };
+  const loadSystemHalt = async () => {
+    try {
+      const res = await api.get('/companies/system/halt');
+      setSystemHalt(res.data.halt);
+    } catch (e) { }
+  };
+
+  const toggleSystemHalt = async () => {
+    const action = systemHalt ? 'RETOMAR' : 'PARAR';
+    if (!confirm(`Tem certeza que deseja ${action} todas as automações de todas as empresas?`)) return;
+    
+    setTogglingHalt(true);
+    try {
+       await api.post('/companies/system/halt', { halt: !systemHalt });
+       setSystemHalt(!systemHalt);
+       alert(`Sistema ${!systemHalt ? 'PAUSADO' : 'RETOMADO'} com sucesso!`);
+    } catch (e) {
+       alert('Erro ao alterar status de emergência.');
+    }
+    setTogglingHalt(false);
+  };
 
   const handleIndexHistory = async () => {
     setIndexingHistory(true);
     try {
       await api.post(`/proactive/index-history/${companyCnpj}`);
       alert("Indexação histórica iniciada em segundo plano! A Analu está varrendo sua Caixa de Saída desde Outubro/2025.");
-      // Recarregar status após um tempo
       setTimeout(() => loadProactiveStatus(companyCnpj), 5000);
     } catch (e: any) {
       alert(e.response?.data?.detail || "Erro ao iniciar indexação.");
@@ -127,7 +147,6 @@ export const Settings: React.FC = () => {
     if (file) {
       const reader = new FileReader();
       reader.onloadend = () => {
-        // Remove prefix 'data:application/x-pkcs12;base64,' if present
         let base64 = reader.result as string;
         if (base64.includes(',')) base64 = base64.split(',')[1];
         setConfig({ ...config, cartorio_pfx_b64: base64 });
@@ -207,18 +226,13 @@ export const Settings: React.FC = () => {
   const checkIsLate = () => {
     const now = new Date();
     const currentDay = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'][now.getDay()];
-    
-    // Suporte tanto para o formato novo (dias) quanto legado/db (dias_ui)
     const diasAtivos = scheduler.dias || scheduler.dias_ui || [];
     const isToday = Array.isArray(diasAtivos) && diasAtivos.includes(currentDay);
-    
     const h = String(now.getHours()).padStart(2, '0');
     const m = String(now.getMinutes()).padStart(2, '0');
     const nowTimeString = `${h}:${m}`;
-    
     const horaConfig = scheduler.hora || scheduler.hora_envio || "09:00";
     const isPastTime = nowTimeString > horaConfig;
-    
     return isToday && isPastTime;
   };
 
@@ -234,7 +248,6 @@ export const Settings: React.FC = () => {
      }
   };
 
-  // --- WhatsApp Evolution ---
   const checkWaStatus = async () => {
     setWaCheckingStatus(true);
     try {
@@ -265,7 +278,7 @@ export const Settings: React.FC = () => {
       const res = await api.get(`/companies/${companyCnpj}/whatsapp/qr`);
       setWaQrCode(res.data.qr_code_base64);
     } catch (e) {
-      setTimeout(fetchQrCode, 3000); // Tentar de novo
+      setTimeout(fetchQrCode, 3000);
     }
   };
 
@@ -282,10 +295,45 @@ export const Settings: React.FC = () => {
     setWaDisconnecting(false);
   };
 
+  const createReportGroup = async () => {
+    setCreatingGroup(true);
+    try {
+      const res = await api.post(`/companies/${companyCnpj}/whatsapp/group/create`);
+      alert(res.data.message);
+      loadConfigs(companyCnpj);
+    } catch (e: any) {
+      alert(e.response?.data?.detail || "Erro ao criar grupo.");
+    }
+    setCreatingGroup(false);
+  };
+
   return (
     <Layout title="Configurações">
       <div className="card max-w-5xl mx-auto">
         
+        {/* Controle de Emergência Global - Sempre Visível no topo das configurações */}
+        <div className="bg-red-50 dark:bg-red-900/20 border-b border-red-200 dark:border-red-800 p-4 flex items-center justify-between">
+          <div>
+            <h4 className="font-bold text-red-800 dark:text-red-400 flex items-center gap-2">
+              <AlertTriangle size={18} /> CONTROLE DE EMERGÊNCIA (MASTER)
+            </h4>
+            <p className="text-xs text-red-700 dark:text-red-500">
+              {systemHalt 
+                ? '⚠️ O SISTEMA ESTÁ COMPLETAMENTE PAUSADO. Nenhuma cobrança automática será enviada.' 
+                : 'O motor de automação está operando normalmente conforme agendamentos.'}
+            </p>
+          </div>
+          <button 
+            onClick={toggleSystemHalt}
+            disabled={togglingHalt}
+            className={`btn-primary border-none shadow-lg px-6 py-2 flex items-center gap-2 transition-all transform hover:scale-105 active:scale-95
+              ${systemHalt ? 'bg-green-600 hover:bg-green-700' : 'bg-red-600 hover:bg-red-700'}`}
+          >
+            {togglingHalt ? <Loader2 className="animate-spin" size={20} /> : (systemHalt ? <Play size={20} /> : <PowerOff size={20} />)}
+            {systemHalt ? 'RETOMAR SISTEMA' : 'PARAR TUDO (PÂNICO)'}
+          </button>
+        </div>
+
         <div className="flex border-b border-slate-200 dark:border-dark-border mb-6 overflow-x-auto">
           {['dados', 'whatsapp', 'email', 'ia'].map(tab => (
             <button
@@ -451,6 +499,53 @@ export const Settings: React.FC = () => {
               </div>
             </div>
             
+            <div className="bg-blue-50 dark:bg-blue-900/10 border border-blue-200 dark:border-blue-800 rounded-xl p-5 mb-6">
+              <h4 className="font-bold text-blue-800 dark:text-blue-300 mb-3 flex items-center">
+                <Users size={20} className="mr-2"/> 📈 Grupo de Relatórios (SaaS)
+              </h4>
+              <p className="text-sm text-blue-700 dark:text-blue-400 mb-4">
+                Configure os números dos diretores que devem receber o relatório diário. 
+                Ao clicar em gerar, a Analu criará um grupo privado no WhatsApp e adicionará essas pessoas.
+              </p>
+              
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-blue-600 dark:text-blue-400 mb-1">Números dos Diretores (DDI+DDD+NÚMERO)</label>
+                  <input
+                    type="text"
+                    className="input-field border-blue-200 focus:border-blue-400"
+                    placeholder="Ex: 5561999999999 ; 5561888888888"
+                    value={config.diretores_whatsapp || ''}
+                    onChange={e => setConfig({...config, diretores_whatsapp: e.target.value})}
+                  />
+                  <p className="text-[10px] mt-1 text-blue-500">Separe os números por ponto e vírgula (;). O robô tentará adicionar todos.</p>
+                </div>
+
+                <div className="flex flex-col md:flex-row gap-4 items-end">
+                  <div className="flex-1">
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">WhatsApp Group JID (ID do Grupo Gerado)</label>
+                    <input
+                      type="text"
+                      className="input-field bg-slate-100 dark:bg-slate-800/50 cursor-not-allowed text-xs"
+                      readOnly
+                      value={config.grupo_relatorio_jid || 'Ainda não gerado'}
+                    />
+                  </div>
+                  <button 
+                    onClick={createReportGroup} 
+                    disabled={creatingGroup || waStatus !== 'open'} 
+                    className={`btn-primary px-6 h-[42px] shadow-lg shadow-blue-500/20 ${waStatus !== 'open' ? 'opacity-50 grayscale' : ''}`}
+                  >
+                    {creatingGroup ? <Loader2 className="animate-spin mr-2" size={18}/> : <Sparkles size={18} className="mr-2"/>}
+                    {config.grupo_relatorio_jid ? 'Sincronizar Participantes' : 'Gerar Grupo Agora'}
+                  </button>
+                </div>
+                {waStatus !== 'open' && (
+                  <p className="text-xs text-red-500 font-medium italic">⚠️ Conecte o WhatsApp acima para habilitar a gestão de grupos.</p>
+                )}
+              </div>
+            </div>
+
             <div className="bg-slate-50 dark:bg-dark-surface border border-slate-200 dark:border-dark-border rounded-xl p-6 flex flex-col md:flex-row items-center gap-6 mt-4">
               <div className="flex-1">
                 <div className="text-sm font-medium text-slate-500 mb-1">Status da Conexão</div>
@@ -551,6 +646,7 @@ export const Settings: React.FC = () => {
 
         {activeTab === 'ia' && (
           <div className="space-y-6 animate-fade-in">
+
              <h3 className="text-lg font-bold dark:text-white mb-2">🤖 Cérebro e Robô Agendador</h3>
              <p className="text-sm text-slate-500 mb-6">Configure a inteligência do sistema e os horários de disparo automático.</p>
              

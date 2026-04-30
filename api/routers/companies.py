@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Header
 from pydantic import BaseModel
 from typing import List, Optional
-from src.database import carregar_todas_unidades_db, cadastrar_unidade_central, excluir_unidade_central, carregar_configuracoes_db, salvar_configuracoes_db
+from src.database import carregar_todas_unidades_db, cadastrar_unidade_central, excluir_unidade_central, carregar_configuracoes_db, salvar_configuracoes_db, is_global_halt_active, set_global_halt
 from src.manager import Manager
 from src.evolution_controller import EvolutionController
 
@@ -200,7 +200,11 @@ def ai_test(cnpj: str):
         )
         return {"success": True, "message": f"Conexão OK! IA respondeu: {response.text}"}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Erro de Conexão IA: {str(e)}")
+        import re
+        err_msg = str(e)
+        err_msg = re.sub(r'AIzaSy[a-zA-Z0-9_\-]{33}', '[CHAVE_REDIGIDA]', err_msg)
+        err_msg = re.sub(r'AQ\.[a-zA-Z0-9_\-]{30,}', '[CHAVE_REDIGIDA]', err_msg)
+        raise HTTPException(status_code=400, detail=f"Erro de Conexão IA: {err_msg}")
 
 from fastapi import BackgroundTasks
 
@@ -237,3 +241,56 @@ def test_cartorio_cert(cnpj: str):
         return {"success": True, "message": f"✅ Certificado Válido! ({cn})"}
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"❌ Erro ao ler certificado. Verifique a senha e o arquivo (.pfx ou .p12). Erro: {str(e)}")
+
+@router.post("/{cnpj:path}/whatsapp/group/create")
+def whatsapp_group_create(cnpj: str):
+    """
+    Cria automaticamente o grupo de relatórios para a empresa.
+    Adiciona os diretores configurados no campo 'diretores_whatsapp'.
+    """
+    conf = carregar_configuracoes_db(cnpj)
+    diretores_raw = conf.get('diretores_whatsapp', '')
+    nome_empresa = conf.get('empresa_nome', 'Empresa')
+    
+    if not diretores_raw:
+        raise HTTPException(status_code=400, detail="Nenhum número de diretor configurado.")
+    
+    # Limpa e valida os números
+    diretores = [n.strip() for n in diretores_raw.replace(',', ';').split(';') if n.strip()]
+    
+    nome_instancia = str(cnpj).replace('.', '').replace('/', '').replace('-', '')
+    evo = EvolutionController(config=conf, nome_empresa_cliente=nome_instancia)
+    
+    # Verifica conexão
+    status = evo.checar_status()
+    if status != "open":
+        raise HTTPException(status_code=400, detail="WhatsApp não está conectado. Conecte primeiro para criar o grupo.")
+    
+    # Criar grupo
+    subject = f"Relatórios Analu - {nome_empresa}"
+    description = f"Grupo de relatórios diários e notificações financeiras da Analu para {nome_empresa}."
+    
+    res = evo.criar_grupo(subject=subject, participants=diretores, description=description)
+    
+    if res and (res.get("id") or (isinstance(res, dict) and "gid" in str(res))):
+        group_jid = res.get("id") or res.get("gid")
+        # Se veio como objeto complexo no v1.8.2 da Evolution
+        if not group_jid and "group" in res:
+            group_jid = res["group"].get("id")
+
+        if group_jid:
+            salvar_configuracoes_db(cnpj, {"grupo_relatorio_jid": group_jid})
+            return {"success": True, "message": f"✅ Grupo '{subject}' criado com sucesso!", "jid": group_jid}
+    
+    err_detail = str(res.get("error")) if res else "Erro desconhecido na Evolution API"
+    raise HTTPException(status_code=500, detail=f"Falha ao criar grupo: {err_detail}")
+
+@router.get("/system/halt")
+def get_system_halt():
+    return {"halt": is_global_halt_active()}
+
+@router.post("/system/halt")
+def post_system_halt(payload: dict):
+    halt = payload.get("halt", False)
+    set_global_halt(halt)
+    return {"success": True, "halt": halt}

@@ -116,7 +116,8 @@ class ProactiveScanner:
                     # Extrai Metadados Proativos
                     # No modo proativo, não sabemos o CNPJ alvo ainda, então passamos None para o Scanner tentar achar
                     meta = scanner.extrair_meta_documento(tmp_path, None, None, None, None, extra_context=assunto)
-                    texto_upper = meta.get('texto_extraido', '').upper()
+                    texto_extraido = meta.get('texto_extraido') or ""
+                    texto_upper = texto_extraido.upper()
                     
                     if meta.get('cnpj_detectado') or meta.get('pertence_cliente') or meta.get('tem_nf') or meta.get('valores'):
                         # Identificamos um documento fiscal!
@@ -145,7 +146,7 @@ class ProactiveScanner:
                         )
 
                         if repo_path:
-                            # Salva no Banco
+                            # Salva no Banco de Documentos
                             agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                             c.execute("""
                                 INSERT INTO documentos_fiscais
@@ -153,6 +154,40 @@ class ProactiveScanner:
                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                             """, (cnpj_extraido, nf_num, tipo, meta.get('emissao'), list(meta.get('valores'))[0] if meta.get('valores') else 0,
                                 repo_path, uid, agora, repo_path))
+
+                            # ─── AUTO-LANÇAMENTO NO CRM (TÍTULOS) ──────────
+                            # Se identificamos o cliente e o valor, lançamos a dívida automaticamente
+                            if cnpj_extraido and meta.get('valores'):
+                                valor_nf = list(meta.get('valores'))[0]
+                                emissao_nf = meta.get('emissao')
+                                
+                                # 1. Busca nome do cliente no banco (ou usa o detectado)
+                                c.execute("SELECT nome FROM clientes WHERE cnpj = ?", (cnpj_extraido,))
+                                res_cli = c.fetchone()
+                                nome_final = res_cli[0] if res_cli else meta.get('nome_detectado', "Cliente Novo (Scanner)")
+                                
+                                if not res_cli:
+                                    # Cria o cliente se for novo
+                                    c.execute("INSERT INTO clientes (nome, cnpj) VALUES (?, ?)", (nome_final, cnpj_extraido))
+                                
+                                # 2. Verifica se o título já existe
+                                c.execute("SELECT id FROM titulos WHERE numero_nf = ? AND pagador = ?", (nf_num, nome_final))
+                                if not c.fetchone():
+                                    # Calcula vencimento aproximado se não detectado (ex: emissão + 30 dias)
+                                    venc = meta.get('vencimento')
+                                    if not venc and emissao_nf:
+                                        try:
+                                            dt_emi = datetime.strptime(emissao_nf, "%d/%m/%Y")
+                                            venc = (dt_emi + timedelta(days=30)).strftime("%d/%m/%Y")
+                                        except: pass
+                                    
+                                    if not venc: venc = (datetime.now() + timedelta(days=15)).strftime("%d/%m/%Y")
+
+                                    c.execute("""
+                                        INSERT INTO titulos (pagador, numero_nf, vencimento, emissao, valor, status, acao)
+                                        VALUES (?, ?, ?, ?, ?, 'Aberto', 'Cobrar')
+                                    """, (nome_final, nf_num, venc, emissao_nf, valor_nf))
+                                    print(f"      🚀 AUTO-LANÇAMENTO: NF {nf_num} para {nome_final} (R$ {valor_nf:.2f})")
 
                             print(f"      Indexado (Repo V2): {tipo} {nf_num} para CNPJ {cnpj_extraido}")
                     else:
@@ -187,6 +222,11 @@ class ProactiveScanner:
 
     def verificar_prevencimento(self, cnpj, config):
         """Verifica títulos que vencem em 2 dias e notifica (apenas status Aberto + acao Cobrar)."""
+        from src.database import is_global_halt_active
+        if is_global_halt_active():
+            print(f"🛑 [EMERGÊNCIA] Lembrete proativo pausado pelo pânico global ({cnpj}).")
+            return
+
         conn = conectar(cnpj)
         c = conn.cursor()
         

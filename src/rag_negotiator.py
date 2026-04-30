@@ -10,7 +10,7 @@ class RAGNegotiator:
     def __init__(self, cnpj_empresa):
         self.cnpj_empresa = cnpj_empresa
         self.config = carregar_configuracoes_db(cnpj_empresa)
-        self.api_key = "AIzaSyB5j_H_pvZ-cFaahzdCxvrqk0fgsWVfTJI" # Chave Fixa (Repositório Privado)
+        self.api_key = self.config.get('gemini_api_key') or os.getenv("GEMINI_API_KEY")
         self.model_id = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
         
         if self.api_key:
@@ -80,7 +80,10 @@ class RAGNegotiator:
                     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [WARNING] Limite de velocidade do Google atingido. A Analu aguardará 35s em silêncio... (Tentativa {attempt+1}/3)")
                     time.sleep(35) # Tolerância pro Google API (exigiu 31s)
                     continue
-                return None, str(e)
+                err_msg = str(e)
+                err_msg = re.sub(r'AIzaSy[a-zA-Z0-9_\-]{33}', '[CHAVE_REDIGIDA]', err_msg)
+                err_msg = re.sub(r'AQ\.[a-zA-Z0-9_\-]{30,}', '[CHAVE_REDIGIDA]', err_msg)
+                return None, err_msg
         return None, "Tentativas esgotadas."
 
     def gerar_proposta_ia(self, cliente_nome, info_debitos, dia_numero=1, history_list=None):
@@ -115,11 +118,10 @@ class RAGNegotiator:
         )
         
         mensagem, erro = self._chamar_gemini(prompt, instrucao)
-        if erro:
-            return f"Falha ao gerar mensagem: {erro}"
-        
-        self.registrar_negociacao_db(cliente_nome, info_debitos, mensagem)
-        return mensagem
+        if not erro:
+            self.registrar_negociacao_db(cliente_nome, info_debitos, mensagem)
+            
+        return mensagem, erro
 
     def gerar_resposta_ia(self, cliente_nome, mensagem_cliente, contexto_debito, history_list=None, intent='financeiro'):
         """

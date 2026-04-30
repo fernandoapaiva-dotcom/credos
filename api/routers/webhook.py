@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Request, Header, HTTPException
-from src.database import conectar, carregar_configuracoes_db, carregar_todas_unidades_db
+from src.database import conectar, carregar_configuracoes_db, carregar_todas_unidades_db, verificar_e_registrar_webhook
 from src.group_history import salvar_mensagem_contexto, obter_contexto_grupo
 from src.rag_negotiator import RAGNegotiator
 from src.evolution_controller import EvolutionController
@@ -8,6 +8,8 @@ from src.cartorio_automation import CartorioAutomation
 from src.mail_scanner import MailScanner
 from src.mailer_service import MailerService
 from datetime import datetime
+import sqlite3
+from google import genai
 import base64
 import asyncio
 import json
@@ -19,14 +21,13 @@ router = APIRouter()
 # Armazena o menu de contexto por número do operador
 _operator_menus: dict = {}
 
-# Deduplicação de mensagens por ID (previne duplo envio por duas instâncias)
-_processed_message_ids: set = set()
-_MAX_IDS_CACHE = 500  # Limita crescimento do set
-
 def _log_webhook(msg: str, level="INFO"):
-    """Escreve um log de auditoria para rastreabilidade portátil."""
+    """Escreve um log de auditoria para rastreabilidade portátil com redação de chaves."""
     try:
-        # Usa o diretório de dados configurado ou ./data/logs como padrão
+        # Redação de segurança: evita que chaves vazem no log
+        msg_redigida = re.sub(r'AIzaSy[a-zA-Z0-9_\-]{33}', '[CHAVE_REDIGIDA]', str(msg))
+        msg_redigida = re.sub(r'AQ\.[a-zA-Z0-9_\-]{30,}', '[CHAVE_REDIGIDA]', msg_redigida)
+
         base_dir = os.getenv("DATABASE_DIR", os.path.join(os.getcwd(), "data"))
         log_dir = os.path.join(base_dir, "logs")
         os.makedirs(log_dir, exist_ok=True)
@@ -34,9 +35,9 @@ def _log_webhook(msg: str, level="INFO"):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         # Log para arquivo
         with open(log_file, "a", encoding="utf-8") as f:
-            f.write(f"[{timestamp}] [{level}] {msg}\n")
+            f.write(f"[{timestamp}] [{level}] {msg_redigida}\n")
         # Log para terminar (docker logs)
-        print(f"[{timestamp}] [{level}] {msg}", flush=True)
+        print(f"[{timestamp}] [{level}] {msg_redigida}", flush=True)
     except Exception as e:
         print(f"Erro Crítico ao salvar log: {e}")
 
@@ -49,9 +50,13 @@ def sanitizar_texto_ia(texto: str) -> str:
     """Remove padrões de Gemini API Keys do texto para evitar bloqueios de 'leaked key'."""
     if not texto: return ""
     import re
-    # Padrao comum das chaves: AQ. seguido de muitos caracteres alfanumericos e hifens/underscores
-    padrao = r'AQ\.[a-zA-Z0-9_\-]{30,}'
-    return re.sub(padrao, '[CHAVE_CONFIDENCIAL]', texto)
+    # Padrao comum das chaves Google AI: AIzaSy seguido de caracteres alfanumericos e hifens/underscores
+    padrao_google = r'AIzaSy[a-zA-Z0-9_\-]{33}'
+    # Padrao Vertex AI
+    padrao_vertex = r'AQ\.[a-zA-Z0-9_\-]{30,}'
+    
+    texto = re.sub(padrao_google, '[CHAVE_CONFIDENCIAL]', texto)
+    return re.sub(padrao_vertex, '[CHAVE_CONFIDENCIAL]', texto)
 
 async def _timeout_concierge(op_num_limpo: str, cliente_nome: str, num_cliente: str,
                               cnpj: str, session_id: int, info_debito: dict,
@@ -95,42 +100,99 @@ async def _timeout_concierge(op_num_limpo: str, cliente_nome: str, num_cliente: 
         _log_webhook(f"Erro no timeout do concierge: {e}", "ERROR")
 
 
-def _encontrar_empresa_por_numero(numero: str):
-    """Busca em todas as empresas qual cliente tem este número de WhatsApp."""
+def _encontrar_empresa_por_numero(numero: str, instance_name: str = None):
+    """
+    Busca em todas as empresas qual cliente tem este número de WhatsApp.
+    Se for um LID (@lid), tenta resolver para número real via Evolution API.
+    """
     unidades = carregar_todas_unidades_db()
-    # Remove DDI se vier com 55 ou sem
-    numero_limpo = "".join(filter(str.isdigit, str(numero)))
-    if not numero_limpo: return None, None
+    numero_raw = str(numero)
+    numero_limpo = "".join(filter(str.isdigit, numero_raw))
     
-    _log_webhook(f"Buscando cliente para número limpo: {numero_limpo}")
+    # --- MAPEAMENTO DE EMERGÊNCIA PARA TESTES DO USUÁRIO (LID FIXO) ---
+    tester_lids = {
+        "198440541790321": "5561998334833", # Fernando LID -> Tel
+        "96087142580386": "554898011718"   # Tiago LID -> Tel
+    }
+    for lid, tel in tester_lids.items():
+        if lid in numero_raw:
+            _log_webhook(f"⚠️ [MAPEAMENTO EMERGENCIAL] LID {numero_raw} mapeado para {tel}")
+            numero_limpo = tel
+            break
 
+    # 1. Se for LID, tenta resolver via Evolution API antes de desistir
+
+    if "@lid" in numero_raw or (numero_limpo and len(numero_limpo) > 12 and not numero_raw.startswith("55")):
+        _log_webhook(f"Identificado possível LID: {numero_raw}. Tentando resolver...")
+        try:
+            # Usa a instância que recebeu a mensagem para tentar resolver o contato
+            target_instance = instance_name if instance_name else (unidades[0]['empresa_cnpj'] if unidades else None)
+            if target_instance:
+                config_inst = carregar_configuracoes_db(target_instance)
+                evo = EvolutionController(config=config_inst, nome_empresa_cliente=target_instance)
+                contato = evo.get_contact(numero_raw)
+                if contato:
+                    # Tenta extrair o número real do perfil
+                    # A Evolution API costuma retornar o número em 'number' ou no JID real
+                    real_jid = contato.get("id") or contato.get("remoteJid") or ""
+                    if "@s.whatsapp.net" in real_jid:
+                        numero_limpo = "".join(filter(str.isdigit, real_jid))
+                        _log_webhook(f"LID {numero_raw} resolvido para número: {numero_limpo}")
+        except Exception as e:
+            _log_webhook(f"Erro ao tentar resolver LID {numero_raw}: {e}", "WARNING")
+
+    if not numero_limpo: return None, None, None
+    
+    _log_webhook(f"Buscando cliente para número final: {numero_limpo}")
+
+    # Prioridade 1: Buscar na instância que recebeu a mensagem (evita cross-leaks)
+
+
+    if instance_name:
+        for u in unidades:
+            if u['empresa_cnpj'] == instance_name or u['empresa_nome'].lower().replace(" ","") == instance_name.lower():
+                cnpj = u['empresa_cnpj']
+                conn = conectar(cnpj)
+                try:
+                    search_pattern = f"%{numero_limpo[-8:]}%"
+                    conn.row_factory = __import__('sqlite3').Row
+                    cli = conn.cursor().execute(
+                        "SELECT nome, cnpj FROM clientes WHERE whatsapp LIKE ?", (search_pattern,)
+                    ).fetchone()
+                    if cli:
+                        _log_webhook(f"✅ [CONTEXTO ATUAL] Cliente '{cli['nome']}' encontrado na empresa {u['empresa_nome']}")
+                        return cnpj, cli['nome'], cli['cnpj']
+                finally:
+                    conn.close()
+
+    # Prioridade 2: Buscar em todas as outras (fallback)
     for u in unidades:
+        # Pula se já buscamos acima
+        if instance_name and (u['empresa_cnpj'] == instance_name or u['empresa_nome'].lower().replace(" ","") == instance_name.lower()):
+            continue
+            
         cnpj = u['empresa_cnpj']
         conn = conectar(cnpj)
-        conn.row_factory = __import__('sqlite3').Row
         try:
-            # Busca por final do número (8 dígitos + flexibilidade)
             search_pattern = f"%{numero_limpo[-8:]}%"
+            conn.row_factory = __import__('sqlite3').Row
             cli = conn.cursor().execute(
                 "SELECT nome, cnpj FROM clientes WHERE whatsapp LIKE ?", (search_pattern,)
             ).fetchone()
             if cli:
-                _log_webhook(f"Cliente '{cli['nome']}' encontrado na empresa {u['empresa_nome']} (CNPJ: {cnpj})")
+                _log_webhook(f"⚠️ [CROSS-CHECK] Cliente '{cli['nome']}' encontrado na empresa {u['empresa_nome']} (CNPJ: {cnpj})")
                 return cnpj, cli['nome'], cli['cnpj']
         finally:
             conn.close()
     
-    # 🚨 OVERRIDE DE SEGURANÇA PARA HOMOLOGAÇÃO (FERNANDO/TECAR)
-    if "198440541790321" in str(numero_limpo) or "61998334833" in str(numero_limpo):
-        _log_webhook("🏁 MASTER OVERRIDE: Fernando identificado pelo ID/Número. Forçando TECAR BRASILIA.")
-        return "54804458000122", "TECAR BRASILIA VEICULOS E SERV", "54804458000122"
-
-    _log_webhook(f"Nenhum cliente encontrado para o número {numero_limpo} em nenhuma empresa.")
+    _log_webhook(f"❌ Nenhum cliente encontrado para o número {numero_limpo} em nenhuma empresa.")
     return None, None, None
+
+
 
 def _obter_sessao_ativa(cnpj, numero):
     conn = conectar(cnpj)
-    conn.row_factory = __import__('sqlite3').Row
+    conn.row_factory = sqlite3.Row
     c = conn.cursor()
     try:
         numero_limpo = "".join(filter(str.isdigit, str(numero)))
@@ -204,8 +266,15 @@ async def receber_webhook_evolution(request: Request):
                  msg.get("extendedTextMessage", {}).get("text") or "").strip()
 
         # ─── FASE 0.2: BLOQUEIO DE AUTO-RESPOSTA ENTRE INSTÂNCIAS (BOT x BOT) ──────
+        # Ignora se contiver a assinatura da Analu para evitar loops entre instâncias
         if "*Analu - Assistente Virtual*" in texto:
-            _log_webhook("MENSAGEM DE OUTRA INSTÂNCIA DA ANALU - Ignorando para evitar loop entre agentes.")
+            _log_webhook("MENSAGEM COM ASSINATURA DA ANALU - Ignorando para evitar loop.")
+            return {"status": "ignored"}
+
+        # ─── FASE 0.3: DEDUPLICAÇÃO GERAL DE MENSAGENS ──────
+        msg_id = key.get("id", "")
+        if msg_id and not verificar_e_registrar_webhook(msg_id):
+            _log_webhook(f"MENSAGEM DUPLICADA DETECTADA ({msg_id}) - Descartando via Banco de Dados.")
             return {"status": "ignored"}
 
         # ─── FASE 0: DETECÇÃO PRIORITÁRIA DO GRUPO DE RELATÓRIO ──────
@@ -244,30 +313,92 @@ async def receber_webhook_evolution(request: Request):
                         raise ValueError("CHAVE_GEMINI_AUSENTE")
 
                     # Passo 2: Inicialização
-                    from google import genai
                     client = genai.Client(api_key=api_key_gemini)
-                    from src.evolution_controller import EvolutionController
                     evo_temp = EvolutionController(config=cfg_temp, nome_empresa_cliente=instance_name)
 
-                    # Passo 3: Prompt Sistêmico com Capacidade de Ação (Agentic)
+                    # Passo 3: Coleta dados REAIS do banco para alimentar a IA (evitar alucinação)
+                    hoje_str = datetime.now().strftime("%Y-%m-%d")
+                    dados_reais_hoje = []
+                    titulos_abertos_resumo = []
+                    for u in unidades_disponiveis:
+                        try:
+                            conn_r = conectar(u['empresa_cnpj'])
+                            conn_r.row_factory = sqlite3.Row
+                            # Cobranças do dia
+                            logs = conn_r.execute(
+                                "SELECT cliente, tipo_envio, status, detalhes FROM logs_envio WHERE data_envio LIKE ? ORDER BY id DESC LIMIT 30",
+                                (f"{hoje_str}%",)
+                            ).fetchall()
+                            for l in logs:
+                                canal_db = l['tipo_envio']
+                                det_raw = l['detalhes']
+                                try:
+                                    det_json = json.loads(det_raw)
+                                    wa = det_json.get('res_wa', False)
+                                    mail = det_json.get('res_email', False)
+                                    if wa and mail: canal_real = "WhatsApp e Email"
+                                    elif wa: canal_real = "WhatsApp"
+                                    elif mail: canal_real = "Email"
+                                    else: canal_real = canal_db
+                                except:
+                                    canal_real = canal_db
+
+                                dados_reais_hoje.append({
+                                    "empresa": u.get('empresa_nome', u['empresa_cnpj']),
+                                    "cliente": l['cliente'],
+                                    "canal": canal_real,
+                                    "status": l['status']
+                                })
+                            # Títulos em aberto por cliente
+                            titulos = conn_r.execute(
+                                "SELECT pagador, COUNT(*) as qtd, SUM(valor) as total FROM titulos WHERE status='Aberto' AND acao='Cobrar' GROUP BY pagador ORDER BY total DESC LIMIT 10"
+                            ).fetchall()
+                            for t in titulos:
+                                titulos_abertos_resumo.append({
+                                    "empresa": u.get('empresa_nome', u['empresa_cnpj']),
+                                    "cliente": t['pagador'],
+                                    "qtd_titulos": t['qtd'],
+                                    "valor_total": round(t['total'] or 0, 2)
+                                })
+                            conn_r.close()
+                        except: pass
+
+                    resumo_hoje = f"{len(dados_reais_hoje)} acionamentos registrados hoje." if dados_reais_hoje else "Nenhum acionamento registrado hoje ainda."
+                    logs_sucesso = [d for d in dados_reais_hoje if d['status'] == 'Sucesso']
+                    logs_falha = [d for d in dados_reais_hoje if d['status'] != 'Sucesso']
+
+                    # Passo 4: Prompt com dados reais injetados
                     prompt_sistema = f"""Você é a Analu, assistente virtual inteligente do Credos System.
-                    Você está em um grupo de supervisores financeiros.
-                    
-                    HISTÓRICO RECENTE DO GRUPO:
-                    {json.dumps(contexto_recente, ensure_ascii=False)}
-                    
-                    MENSAGEM ATUAL: "{texto}"
-                    
-                    CAPACIDADES:
-                    1. RESPONDER DÚVIDAS: Use o histórico de negociação de clientes se solicitado.
-                    2. EXECUTAR AÇÕES (NOVO!): Se o supervisor pedir para você falar com um cliente ou cobrar alguém, retorne um JSON no seguinte formato:
-                       {{"action": "send_message", "client_name": "NOME_DO_CLIENTE", "text_to_send": "MENSAGEM_PRO_CLIENTE"}}
-                    
-                    REGRAS:
-                    - Se for apenas uma conversa ou dúvida, responda normalmente em texto.
-                    - Se for um comando de ação, retorne APENAS o JSON da ação.
-                    - Seja profissional, curta e direta.
-                    """
+Você está em um grupo de supervisores financeiros.
+
+⚠️ REGRA CRÍTICA: Responda APENAS com dados fornecidos abaixo. NUNCA invente nomes de clientes, valores ou informações.
+
+📊 DADOS REAIS DE ACIONAMENTOS DE HOJE ({datetime.now().strftime('%d/%m/%Y')}):
+- Resumo: {resumo_hoje}
+- Detalhamento de Sucessos: {json.dumps(logs_sucesso, ensure_ascii=False)}
+- Detalhamento de Falhas: {json.dumps(logs_falha, ensure_ascii=False)}
+
+INSTRUÇÃO PARA O RELATÓRIO:
+1. Agrupe os clientes por EMPRESA.
+2. Informe o CANAL utilizado (WhatsApp, E-mail ou ambos).
+3. Seja clara e organizada (use tópicos).
+
+📋 CARTEIRA EM ABERTO (top devedores):
+{json.dumps(titulos_abertos_resumo, ensure_ascii=False, indent=2)}
+
+📝 HISTÓRICO RECENTE DO GRUPO:
+{json.dumps(contexto_recente, ensure_ascii=False)}
+
+MENSAGEM ATUAL DO SUPERVISOR: "{texto}"
+
+CAPACIDADES:
+1. RESPONDER detalhadamente com base nos dados. Separe por empresa se houver mais de uma.
+2. EXECUTAR AÇÕES:
+   - Cobrar um cliente: {{"action": "send_message", "client_name": "NOME_DO_CLIENTE", "text_to_send": "MENSAGEM"}}
+   - Gerar Relatório PDF de hoje: {{"action": "generate_report", "reason": "Solicitado pelo supervisor"}}
+- Se a lista estiver vazia, diga que não houve cobranças registradas ainda hoje.
+- Seja profissional, concisa e direta.
+"""
                     
                     res_ia = client.models.generate_content(model=GEMINI_MODEL_LATEST, contents=prompt_sistema)
                     resposta_texto = res_ia.text.strip()
@@ -298,7 +429,6 @@ async def receber_webhook_evolution(request: Request):
                                         
                                         if cli_row and cli_row[0]:
                                             try:
-                                                from src.manager import Manager
                                                 mgr = Manager(u_item['empresa_cnpj'])
                                                 # Dispara a régua de cobrança completa (com títulos, atrasos, multas e PDF)
                                                 if mgr.cobrar_cliente_especifico(cli_row[1], canais_selecionados=['WhatsApp']):
@@ -310,6 +440,37 @@ async def receber_webhook_evolution(request: Request):
                                     
                                     if not sucesso_envio:
                                         resposta_final_grupo = f"⚠️ Não consegui localizar o número do WhatsApp para o cliente '{cliente_alvo}' em nenhuma unidade."
+                                
+                                elif action_data.get("action") == "generate_report":
+                                    _log_webhook("AGENTE: Gerando relatório PDF para TODAS as unidades...")
+                                    try:
+                                        if not unidades_disponiveis:
+                                            unidades_disponiveis = carregar_todas_unidades_db() or []
+                                            
+                                        if unidades_disponiveis:
+                                            enviados = 0
+                                            for u_item in unidades_disponiveis:
+                                                cnpj_rel = u_item['empresa_cnpj']
+                                                nome_emp = u_item.get('empresa_nome', cnpj_rel)
+                                                
+                                                _log_webhook(f"Gerando relatório para {nome_emp}...")
+                                                mgr_rel = Manager(cnpj_rel)
+                                                pdf_path = mgr_rel.gerar_relatorio_pdf_operacao_diaria()
+                                                
+                                                if os.path.exists(pdf_path):
+                                                    pdf_abs = os.path.abspath(pdf_path)
+                                                    evo_temp.enviar_mensagem_texto(remote_jid, f"📄 *Relatório de Operação:* {nome_emp}")
+                                                    evo_temp.enviar_midia(remote_jid, pdf_abs)
+                                                    enviados += 1
+                                                    try: os.remove(pdf_path)
+                                                    except: pass
+                                            
+                                            resposta_final_grupo = f"Prontinho! ✅ Gereis e enviei {enviados} relatórios individuais (um para cada empresa cadastrada no sistema)."
+                                        else:
+                                            resposta_final_grupo = "⚠️ Não localizei nenhuma empresa cadastrada para gerar relatórios."
+                                    except Exception as e_rel:
+                                        _log_webhook(f"Erro ao gerar relatórios em massa: {e_rel}", "ERROR")
+                                        resposta_final_grupo = "❌ Ocorreu um erro ao tentar processar os relatórios das empresas."
                         except Exception as e_json:
                             _log_webhook(f"Erro ao processar JSON de ação: {e_json}", "ERROR")
                             resposta_final_grupo = "Ops! Tentei realizar a ação mas o comando veio formatado de um jeito que não entendi."
@@ -336,18 +497,10 @@ async def receber_webhook_evolution(request: Request):
                 salvar_mensagem_contexto(remote_jid, "user", texto)
             
             return {"status": "ok"}
-
-        # ─── FASE 1: FILTRO fromMe & DEDUPLICAÇÃO ───────────────────
-        if key.get("fromMe", False):
+        # ─── BLOQUEIO GLOBAL DE GRUPOS NÃO AUTORIZADOS ──────────────
+        if "@g.us" in remote_jid and remote_jid != GRUPO_RELATORIO_ID:
+            _log_webhook(f"MENSAGEM DE GRUPO IGNORADA: {remote_jid}")
             return {"status": "ignored"}
-
-        msg_id = key.get("id", "")
-        if msg_id and msg_id in _processed_message_ids:
-            return {"status": "ignored"}
-        if msg_id:
-            _processed_message_ids.add(msg_id)
-            if len(_processed_message_ids) > _MAX_IDS_CACHE:
-                _processed_message_ids.clear()
 
         # ─── FASE 2: RESOLUÇÃO DE NÚMERO (LID) ──────────────────────
         if "@lid" in remote_jid:
@@ -657,14 +810,20 @@ async def receber_webhook_evolution(request: Request):
                     return {"status": "ok"}
 
         # ─── 2. SE NÃO É OPERADOR, É CLIENTE ─────────────────────────
-        cnpj, cliente_nome, cliente_cnpj = _encontrar_empresa_por_numero(numero_raw)
+        cnpj, cliente_nome, cliente_cnpj = _encontrar_empresa_por_numero(numero_raw, instance_name=instance_name)
+
         if not cnpj: 
-            _log_webhook(f"Ignorando sender desconhecido: {numero_raw} (Considere cadastrar este número no CRM)")
-            return {"status": "ignored", "reason": "unknown_sender"}
+            _log_webhook(f"Sender desconhecido: {numero_raw}. Enviando resposta de boas-vindas/ajuda.")
+            # Tenta pegar uma EvolutionController de qualquer empresa para responder
+            unidades_fallback = carregar_todas_unidades_db()
+            if unidades_fallback:
+                _log_webhook(f"Sender desconhecido: {numero_raw}. IGNORANDO silenciosamente conforme regra estrita.")
+            return {"status": "ok", "reason": "unknown_sender_ignored"}
 
         _log_webhook(f"Cliente identificado: {cliente_nome} (Empresa: {cnpj})")
-        config = carregar_configuracoes_db(cnpj)
-        evo = EvolutionController(config=config, nome_empresa_cliente=instance_name)
+        # --- CORREÇÃO MULTI-TENANCY: Usa config da instância de ORIGEM ---
+        config_inst = carregar_configuracoes_db(instance_name) if len(instance_name) > 10 else carregar_configuracoes_db(cnpj)
+        evo = EvolutionController(config=config_inst, nome_empresa_cliente=instance_name)
         negotiator = RAGNegotiator(cnpj)
         mgr = Manager(cnpj)
         
@@ -673,7 +832,7 @@ async def receber_webhook_evolution(request: Request):
         _log_webhook(f"Débitos encontrados: R$ {info_debito['total']:.2f}")
 
         if info_debito['total'] <= 0:
-            _log_webhook("Cliente não possui débitos ativos. Ignorando.")
+            _log_webhook("Cliente não possui débitos ativos. IGNORANDO silenciosamente conforme regra estrita.")
             return {"status": "ignored"}
 
         sessao = _obter_sessao_ativa(cnpj, numero_raw)
@@ -821,6 +980,11 @@ async def receber_webhook_evolution(request: Request):
             resp, err = negotiator.gerar_resposta_ia(cliente_nome, texto, info_debito, history_list[-20:], intent=intent)
             if err:
                 _log_webhook(f"Erro ao chamar Gemini: {err}", "ERROR")
+                # Se a chave for bloqueada, avisa o operador se possível
+                if "leaked" in str(err).lower() or "permission_denied" in str(err).lower():
+                    op_num = config.get('operador_whatsapp')
+                    if op_num:
+                        evo.enviar_mensagem_texto(op_num, "⚠️ *ALERTA CRÍTICO: Chave Gemini Bloqueada!*\nA Google desativou sua chave de API por vazamento. Por favor, gere uma nova chave no Google AI Studio e atualize nas configurações.")
                 return {"status": "error"}
 
             _log_webhook(f"IA gerou: \"{resp}\"")
@@ -859,7 +1023,7 @@ async def receber_webhook_evolution(request: Request):
 
                 _log_webhook(f"🏁 Orquestrando entrega de documentos. Email Alvo: {email_alvo}")
                 try:
-                    scanner = MailScanner(config)
+                    scanner = MailScanner(config_inst)
                     pool_arquivos_global = set()
                     
                     # 1. Coleciona todos os documentos relevantes para todos os títulos em aberto
@@ -902,8 +1066,8 @@ async def receber_webhook_evolution(request: Request):
                         # 3. Envio via E-mail (se solicitado)
                         if email_alvo:
                             _log_webhook(f"Disparando e-mail SMTP para {email_alvo}...")
-                            mailer = MailerService(user=config.get('base_mail_user'), password=config.get('base_mail_pass'))
-                            corpo_email = f"Olá, {cliente_nome}.\n\nConforme conversamos via WhatsApp, seguem em anexo os documentos (Notas Fiscais/Boletos) referentes ao seu débito com a {config.get('empresa_nome')}.\n\nQualquer dúvida, estamos à disposição."
+                            mailer = MailerService(user=config_inst.get('base_mail_user'), password=config_inst.get('base_mail_pass'))
+                            corpo_email = f"Olá, {cliente_nome}.\n\nConforme conversamos via WhatsApp, seguem em anexo os documentos (Notas Fiscais/Boletos) referentes ao seu débito com a {config_inst.get('empresa_nome')}.\n\nQualquer dúvida, estamos à disposição."
                             mailer.enviar_email_com_anexos(email_alvo, "Documentos Fiscais - Credos", corpo_email, list(pool_arquivos_global))
                             evo.enviar_mensagem_texto(remote_jid, f"✅ Prontinho! Acabei de enviar os documentos para o e-mail *{email_alvo}*. Dá uma olhadinha lá! 😉")
 
@@ -930,15 +1094,20 @@ async def receber_webhook_evolution(request: Request):
             resp_limpa = re.sub(r'\n{3,}', '\n\n', resp_limpa).strip()
             
             msg_final = f"*Analu (Assistente Virtual) Diz:*\n\n{resp_limpa}"
-            # --- LOGICA DE ENVIO COM RETRY (9º DÍGITO BRA) ---
+            # --- LOGICA DE ENVIO COM RETRY ---
             _log_webhook(f"Enviando resposta para {remote_jid}...")
             r_envio = evo.enviar_mensagem_texto(remote_jid, msg_final)
             
-            # Se falhou e é brasileiro, tenta o fallback do 9º dígito
+            # Fallback 1: @lid falhou - tenta converter o numero do @lid para @s.whatsapp.net
+            if not r_envio and "@lid" in str(remote_jid):
+                num_lid = remote_jid.split("@")[0]
+                jid_fallback = f"{num_lid}@s.whatsapp.net"
+                _log_webhook(f"@lid falhou. Tentando JID convertido: {jid_fallback}")
+                r_envio = evo.enviar_mensagem_texto(jid_fallback, msg_final)
+
+            # Fallback 2: Se é brasileiro com 9º dígito, tenta variação
             if not r_envio and "55" in str(remote_jid):
                 _log_webhook("Tentativa falhou. Testando variação do 9º dígito (Brasil)...")
-                # Se tem 13 dígitos + @, tenta tirar o 9 (posição 4 depois do 55+DDD)
-                # JID: 5561998334833@s.whatsapp.net -> 556198334833@s.whatsapp.net
                 partes = str(remote_jid).split("@")
                 num_base = partes[0]
                 if len(num_base) == 13: # 55 + DDD (2) + 9 + 8 digitos

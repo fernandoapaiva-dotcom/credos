@@ -33,7 +33,10 @@ async def generate_negotiation(req: NegotiateRequest):
         info = debitos[req.cliente_nome]
         
         # Gera proposta via IA (RAG)
-        proposta = rag.gerar_proposta_ia(req.cliente_nome, info)
+        proposta, erro = rag.gerar_proposta_ia(req.cliente_nome, info)
+        
+        if erro:
+            raise HTTPException(status_code=500, detail=f"Erro na IA: {erro}")
         
         return {
             "cliente": req.cliente_nome,

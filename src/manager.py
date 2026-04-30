@@ -1,5 +1,16 @@
+import sys
 import os
+
+# Correção para caracteres especiais no Windows (evita erro 'charmap')
+if sys.platform == 'win32':
+    try:
+        import io
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+    except: pass
+
 import json
+
 import pandas as pd
 from datetime import datetime
 from fpdf import FPDF
@@ -124,9 +135,11 @@ class Manager:
             for t in titulos:
                 if t['acao'] == 'Cobrar' and t['status'] in ('Aberto', 'Manter Aberto', 'Cartrio'):
                     calc = self.calcular_valores_cdc(t['valor'], t['vencimento'])
-                    t_copy = dict(t)
-                    t_copy.update(calc)
-                    pendentes.append(t_copy)
+                    # SÓ COBRA SE ESTIVER ATRASADO (Dias Atraso >= 1)
+                    if calc.get('dias_atraso', 0) >= 1:
+                        t_copy = dict(t)
+                        t_copy.update(calc)
+                        pendentes.append(t_copy)
             
             if pendentes:
                 total_cli = sum(t['total'] for t in pendentes)
@@ -218,44 +231,82 @@ class Manager:
         prazo_cartorio_config = self.config.get('dias_para_cartorio') if self.config.get('dias_para_cartorio') is not None else 10
         
         has_cartorio = any(it.get('status') == 'Cartrio' for it in itens)
-        dias_max_atraso = max([it.get('dias_atraso', 0) for it in itens]) if itens else 0
-        restante_cartorio = prazo_cartorio_config - dias_max_atraso
+        # Calcula o atraso real (sem o max(0, ...)) para decidir o tom
+        atrasos_reais = []
+        for it in itens:
+            try:
+                venc = datetime.strptime(it['vencimento'], "%d/%m/%Y")
+                atrasos_reais.append((agora - venc).days)
+            except: atrasos_reais.append(0)
+            
+        max_atraso_real = max(atrasos_reais) if atrasos_reais else 0
+        restante_cartorio = prazo_cartorio_config - max_atraso_real
         
         msg = f"{saudacao}, {contato}.\nSou a *Analu*, assistente financeira da *{self.config.get('empresa_nome', 'empresa')}*.\n\n"
         
+        # ─── DEFINIÇÃO DO TOM DA MENSAGEM ───
         if has_cartorio:
             msg += f" *NOTIFICAÇÃO DE TÍTULO EM CARTÓRIO*\n\n"
             msg += f"Informamos que os débitos abaixo em nome de *{nome_cliente}* já se encontram em processo de **PROTESTO/CARTÓRIO** devido ao tempo de atraso.\n\n"
+        elif max_atraso_real < 0:
+            # TOM: LEMBRETE AMIGÁVEL / CONFIRMAÇÃO DE RECEBIMENTO
+            msg += f"Estou passando para confirmar se você recebeu os boletos dos nossos próximos faturamentos e se está tudo certo para os vencimentos abaixo. 😊\n\n"
+        elif max_atraso_real == 0:
+            # TOM: LEMBRETE DE HOJE
+            msg += f"Gostaria de lembrar gentilmente que temos título(s) com vencimento para o dia de **HOJE**. Qualquer dúvida com o boleto, estou aqui para ajudar! 👍\n\n"
+        elif 1 <= max_atraso_real <= 3:
+            # TOM: COBRANÇA LEVE
+            msg += f"Identifiquei que os títulos abaixo ainda constam em aberto no nosso sistema. Houve algum imprevisto com o pagamento ou envio do comprovante? 🤝\n\n"
         else:
-            msg += f"Gostaria de tratar sobre a regularização das suas pendências financeiras em aberto conosco.\n\n"
+            # TOM: REGULARIZAÇÃO (MAIS DE 3 DIAS)
+            msg += f"Gostaria de tratar sobre a regularização das suas pendências financeiras em aberto conosco. Precisamos colocar seu cadastro em dia para evitar restrições. ⚠️\n\n"
         
-        # Avisos de prazo (apenas se não estiver em cartório ou se houver outros a vencer)
-        if not has_cartorio:
-            if restante_cartorio > 5:
+        # Avisos de prazo (apenas se houver atraso e não estiver em cartório)
+        if not has_cartorio and max_atraso_real > 0:
+            if 5 < restante_cartorio <= 10:
                 msg += f" *Aviso:* Faltam {restante_cartorio} dias para o início do processo de negativação/cartório.\n"
             elif 1 < restante_cartorio <= 5:
                 msg += f" *ALERTA URGENTE:* Faltam apenas *{restante_cartorio} dias* para o envio automático deste débito ao *CARTÓRIO*.\n"
             elif restante_cartorio == 1:
                 msg += f" *NOTIFICAÇÃO FINAL:* Seu título será instruído para *CARTÓRIO AMANHÃ*.\n"
-            elif restante_cartorio == 0:
+            elif restante_cartorio <= 0:
                 msg += f" *PRAZO ESGOTADO:* O título atingiu o prazo limite e o processo de *CARTÓRIO* será iniciado HOJE.\n"
         
         if has_cartorio:
             msg += f" *Atenção:* Títulos em cartório geram restrições imediatas ao crédito e custos adicionais operacionais.\n"
 
-        msg += f"\n *Detalhamento dos Títulos:*\n"
+        msg += f"\n*Detalhamento do(s) Título(s):*\n"
         
         for item in itens:
-            msg += f" *NF {item['numero_nf']}* | Venc: {item['vencimento']} ({item['dias_atraso']} dias de atraso)\n"
-            msg += f"    Principal: R$ {item['principal']:,.2f}\n"
-            if item.get('multa', 0) > 0 or item.get('juros', 0) > 0:
-                msg += f"    (+) Encargos: R$ {item['multa'] + item['juros']:,.2f}\n"
-            msg += f"    Subtotal: R$ {item['total']:,.2f}\n\n"
+            nf_display = item.get('numero_nf') or 'S/NF'
+            v_str = item['vencimento']
+            try:
+                d_atr = (agora - datetime.strptime(v_str, "%d/%m/%Y")).days
+                if d_atr < 0: status_venc = f"(_vence em {-d_atr} dias_)"
+                elif d_atr == 0: status_venc = "(*Vence HOJE*)"
+                else: status_venc = f"({d_atr} dias de atraso)"
+            except: status_venc = f"(Venc: {v_str})"
+
+            msg += f"📄 *NF {nf_display}*\n"
+            msg += f"   • Valor: R$ {item['principal']:,.2f}\n"
+            msg += f"   • Vencimento: {v_str} {status_venc}\n"
             
-        msg += f" *VALOR TOTAL ATUALIZADO:* R$ {total:,.2f}\n\n"
+            if item.get('multa', 0) > 0 or item.get('juros', 0) > 0:
+                encargos = item.get('multa', 0) + item.get('juros', 0)
+                msg += f"   • (+) Encargos: R$ {encargos:,.2f}\n"
+            
+            msg += f"   • *Subtotal: R$ {item.get('total', item['principal']):,.2f}*\n\n"
+
+        if len(itens) > 1:
+            msg += f"💰 *VALOR TOTAL ATUALIZADO: R$ {total:,.2f}*\n\n"
+
+        if max_atraso_real < 0:
+            msg += f"Gentileza confirmar o recebimento para nossa organização interna. Obrigada! 😊"
+        else:
+            msg += f"Gentileza entrar em contato ou enviar o comprovante para regularização. Se já pagou, por favor desconsidere esta mensagem."
         
         if has_cartorio:
-            msg += f" *INSTRUÇÕES DE REGULARIZAÇÃO:*\n"
+            msg += f"\n\n *INSTRUÇÕES DE REGULARIZAÇÃO:*\n"
             msg += f"1. O pagamento do valor acima deve ser feito à nossa empresa para quitação do débito.\n"
             msg += f"2. As **taxas de cartório** deverão ser pagas por sua empresa **diretamente ao tabelionato**.\n"
             msg += f"3. Após confirmarmos seu pagamento, emitiremos a **CARTA DE ANUÊNCIA** digital para que você possa baixar o protesto imediatamente.\n\n"
@@ -290,7 +341,13 @@ class Manager:
         if not arquivos_temp: return None, []
         
         import zipfile
-        zip_name = f"faturas_{cliente_nome.replace(' ', '_')}_{datetime.now().strftime('%H%M%S')}.zip"
+        import re
+
+        # Sanitização do nome do arquivo para evitar erro no mobile
+        nome_limpo = re.sub(r'[^\w\s-]', '', cliente_nome).strip()
+        nome_limpo = re.sub(r'[\s]+', '_', nome_limpo)
+        
+        zip_name = f"faturas_{nome_limpo}_{datetime.now().strftime('%H%M%S')}.zip"
         try:
             with zipfile.ZipFile(zip_name, 'w') as z:
                 for f in arquivos_temp:
@@ -719,23 +776,23 @@ class Manager:
         
         # --- CABEÇALHO ---
         pdf.set_fill_color(0, 51, 102) # Dark Blue
-        pdf.rect(0, 0, 210, 40, 'F')
+        pdf.rect(0, 0, 210, 35, 'F')
         
         credos_logo = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'logo.png')
         if os.path.exists(credos_logo):
-            try: pdf.image(credos_logo, 10, 8, h=12)
+            try: pdf.image(credos_logo, 10, 8, h=10)
             except: pass
             
         pdf.set_text_color(255, 255, 255)
-        pdf.set_font("Arial", 'B', 16)
-        pdf.set_y(10)
-        pdf.cell(0, 8, str(empresa_nome).upper(), 0, 1, 'R')
-        pdf.set_font("Arial", '', 10)
-        pdf.cell(0, 6, f"RELATÓRIO EXECUTIVO DE OPERAÇÃO DIÁRIA", 0, 1, 'R')
+        pdf.set_font("Arial", 'B', 13)
+        pdf.set_y(12)
+        pdf.cell(0, 7, str(empresa_nome).upper(), 0, 1, 'R')
+        pdf.set_font("Arial", '', 9)
+        pdf.cell(0, 5, f"RELATÓRIO EXECUTIVO DE OPERAÇÃO DIÁRIA", 0, 1, 'R')
         
         data_br = datetime.strptime(data_alvo, "%Y-%m-%d").strftime("%d/%m/%Y")
-        pdf.set_font("Arial", 'I', 9)
-        pdf.cell(0, 5, f"Data da Operação: {data_br} | Gerado em: {datetime.now().strftime('%d/%m/%Y %H:%M')}", 0, 1, 'R')
+        pdf.set_font("Arial", 'I', 8)
+        pdf.cell(0, 4, f"Data da Operação: {data_br} | Gerado em: {datetime.now().strftime('%d/%m/%Y %H:%M')}", 0, 1, 'R')
         
         # --- RESUMO EXECUTIVO ---
         pdf.set_y(45)
@@ -810,10 +867,11 @@ class Manager:
         finally:
             conn.close()
             
-        pdf.set_y(-20)
-        pdf.set_font("Arial", 'I', 8)
-        pdf.set_text_color(100, 100, 100)
-        pdf.cell(0, 10, "Credos System - Analu AI | Tecnologia Avançada de Cobrança", 0, 0, 'C')
+        # --- RODAPÉ (Sem forçar nova página) ---
+        pdf.set_y(-15)
+        pdf.set_font("Arial", 'I', 7)
+        pdf.set_text_color(150, 150, 150)
+        pdf.cell(0, 5, "Credos System - Analu AI | Tecnologia Avançada de Cobrança", 0, 0, 'C')
             
         pdf_path = f"temp_data/relatorio_diario_{self.cnpj_empresa}_{datetime.now().strftime('%H%M')}.pdf"
         os.makedirs("temp_data", exist_ok=True)

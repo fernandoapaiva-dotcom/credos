@@ -14,7 +14,15 @@ def _get_default_logo():
     return ""
 
 # Configuração de diretório (suporte para Docker)
-DATABASE_DIR = os.getenv("DATABASE_DIR", "/app/data")
+DATABASE_DIR = os.getenv("DATABASE_DIR")
+if not DATABASE_DIR:
+    # Se estivermos no Docker, usamos /app/data
+    if os.path.exists('/.dockerenv'):
+        DATABASE_DIR = "/app/data"
+    else:
+        # Localmente, usamos a raiz do projeto (um nível acima de src)
+        DATABASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 if not os.path.exists(DATABASE_DIR):
     os.makedirs(DATABASE_DIR, exist_ok=True)
 
@@ -26,7 +34,15 @@ def conectar(cnpj=None):
     if cnpj:
         # Limpa o CNPJ para usar como nome de arquivo
         safe_cnpj = str(cnpj).replace('.', '').replace('/', '').replace('-', '').strip()
+        # Tenta com o prefixo db_ (novo padrão)
         db_path = os.path.join(DATABASE_DIR, f"{DB_PREFIX}{safe_cnpj}.db")
+        
+        # Se não existir com db_, tenta sem o prefixo (legado detectado)
+        if not os.path.exists(db_path):
+            legacy_path = os.path.join(DATABASE_DIR, f"{safe_cnpj}.db")
+            if os.path.exists(legacy_path):
+                db_path = legacy_path
+        
         conn = sqlite3.connect(db_path, timeout=30)
         conn.row_factory = sqlite3.Row
         # Verifica se as tabelas fundamentais existem
@@ -69,6 +85,10 @@ def _verificar_migracoes_config(conn):
         c.execute("ALTER TABLE config ADD COLUMN chave_pix TEXT")
     if 'tipo_chave_pix' not in cols:
         c.execute("ALTER TABLE config ADD COLUMN tipo_chave_pix TEXT")
+    if 'diretores_whatsapp' not in cols:
+        c.execute("ALTER TABLE config ADD COLUMN diretores_whatsapp TEXT")
+    if 'grupo_relatorio_jid' not in cols:
+        c.execute("ALTER TABLE config ADD COLUMN grupo_relatorio_jid TEXT")
     
     # Migração Clientes para incluir Endereço
     c.execute("PRAGMA table_info(clientes)")
@@ -288,8 +308,25 @@ def inicializar_banco():
     c.execute('''CREATE TABLE IF NOT EXISTS config_global (
         id INTEGER PRIMARY KEY DEFAULT 1,
         grupo_relatorio_jid TEXT,
-        webhook_url TEXT
+        webhook_url TEXT,
+        global_halt INTEGER DEFAULT 0
     )''')
+    
+    # Migração config_global (se a coluna não existir)
+    c.execute("PRAGMA table_info(config_global)")
+    cols = [col[1] for col in c.fetchall()]
+    if 'global_halt' not in cols:
+        c.execute("ALTER TABLE config_global ADD COLUMN global_halt INTEGER DEFAULT 0")
+
+    # Tabela de Deduplicação de Mensagens (Persistent Webhooks)
+    c.execute('''CREATE TABLE IF NOT EXISTS webhook_ids (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        msg_id TEXT UNIQUE,
+        processado_em DATETIME DEFAULT CURRENT_TIMESTAMP
+    )''')
+    
+    # Limpa IDs antigos (mais de 48h) para evitar inchaço
+    c.execute("DELETE FROM webhook_ids WHERE processado_em < datetime('now', '-48 hours')")
     
     # Init row if not exists
     c.execute("INSERT OR IGNORE INTO config_global (id, grupo_relatorio_jid) VALUES (1, NULL)")
@@ -301,6 +338,55 @@ def inicializar_banco():
     
     conn.commit()
     conn.close()
+
+def verificar_e_registrar_webhook(msg_id):
+    """Verifica e registra um ID de mensagem de forma atômica no banco central."""
+    if not msg_id: return False
+    conn = conectar() 
+    c = conn.cursor()
+    try:
+        c.execute("INSERT INTO webhook_ids (msg_id) VALUES (?)", (msg_id,))
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+    except Exception as e:
+        print(f"Erro ao verificar deduplicação: {e}")
+        return True # Na dúvida, deixa passar pra não travar o bot
+    finally:
+        conn.close()
+
+def is_global_halt_active():
+    """Verifica se o botão de emergência 'PARAR TUDO' foi acionado."""
+    conn = conectar()
+    c = conn.cursor()
+    try:
+        row = c.execute("SELECT global_halt FROM config_global WHERE id = 1").fetchone()
+        return bool(row[0]) if row else False
+    except:
+        return False
+    finally:
+        conn.close()
+
+def set_global_halt(active: bool):
+    """Ativa ou desativa o botão de emergência."""
+    conn = conectar()
+    c = conn.cursor()
+    try:
+        c.execute("UPDATE config_global SET global_halt = ? WHERE id = 1", (1 if active else 0,))
+        conn.commit()
+    finally:
+        conn.close()
+
+def get_global_jid():
+    """Retorna o JID do grupo de relatórios geral."""
+    conn = conectar()
+    c = conn.cursor()
+    try:
+        row = c.execute("SELECT grupo_relatorio_jid FROM config_global WHERE id = 1").fetchone()
+        return row[0] if row else None
+    finally:
+        conn.close()
 
 # ==============================================================================
 # 0. GESTÃO DE UNIDADES (CENTRAL)

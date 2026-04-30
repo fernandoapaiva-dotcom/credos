@@ -115,7 +115,7 @@ def executar_rotina_de_cobranca():
                 
                 # Gera texto com IA (Gemini)
                 prompt = f"Crie uma mensagem curta e educada de cobrança para o cliente {cliente}. O total devido é R$ {total_divida}. As notas são: {', '.join(itens)}."
-                mensagem_ia = get_ai_response(prompt)
+                mensagem_ia = get_ai_response(prompt, api_key=mgr.config.get('gemini_api_key'))
                 if not mensagem_ia:
                     mensagem_ia = f"Olá {cliente}, identificamos pendências no valor de R$ {total_divida} referente às notas {', '.join(itens)}."
 

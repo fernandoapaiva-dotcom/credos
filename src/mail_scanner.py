@@ -17,11 +17,8 @@ class MailScanner:
         self.pasta_destino = os.path.join(self.base_temp, "attachments")
         self.enviados_detectada = None
         
-        # LIMPEZA ABRUPTA DO CACHE FSICO
-        import shutil
-        if os.path.exists(self.pasta_destino):
-            try: shutil.rmtree(self.pasta_destino)
-            except: pass
+        # Garante que a pasta existe, MAS NÃO DELETA O CONTEÚDO
+        # Isso previne que requisições concorrentes apaguem os arquivos umas das outras
         os.makedirs(self.pasta_destino, exist_ok=True)
 
     def conectar(self):
@@ -156,6 +153,76 @@ class MailScanner:
             
         return dados
 
+    def _extrair_identidade_tomador(self, texto_upper):
+        """
+        Extrai Nome e CNPJ do TOMADOR/DESTINATÁRIO dos 3 tipos de documento fiscal.
+        Padrões robustos baseados nos layouts reais: NFe (DANFE), NFS-e e Fatura de Locação.
+        Retorna (nome, cnpj) ou (None, None) se não encontrar campos rotulados.
+        """
+        def _limpa_cnpj(s): return re.sub(r'\D', '', s)
+        
+        nome_ret = None
+        cnpj_ret = None
+
+        # ── 1. Fatura de Locação (Padrão SERV WELD / ALVORADA) ──────────────────
+        if "FATURA" in texto_upper:
+            m_nome = re.search(r'NOME\s+DO\s+CLIENTE\s*[:\-]?\s*([A-Z0-9\s.\-&]{5,})', texto_upper)
+            m_cnpj = re.search(r'CNPJ\s*[:\-]?\s*(\d{14}|\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2})', texto_upper)
+            if m_nome and m_cnpj:
+                nome_ret = m_nome.group(1).split('\n')[0].strip()
+                cnpj_ret = _limpa_cnpj(m_cnpj.group(1))
+                # Limpeza extra para nomes que capturam etiquetas da mesma linha
+                nome_ret = re.split(r'\s{2,}|ENDERE[CÇ]O|CNPJ|INSCRI[CÇ][AÃ]O', nome_ret)[0].strip()
+                if len(cnpj_ret) in (11, 14):
+                    return nome_ret, cnpj_ret
+
+        # ── 2. NFS-e (Padrão Distrito Federal / Outros) ────────────────────────
+        if "TOMADOR" in texto_upper:
+            # Busca bloco do tomador para evitar pegar dados do prestador
+            bloco_t = re.search(r'(?:TOMADOR|DADOS DO TOMADOR)(.*?)(?:DADOS DO INTERMEDIÁRIO|DESCRIÇÃO DOS SERVIÇOS|DETALHAMENTO DOS TRIBUTOS|ENDEREÇO|$)', texto_upper, re.DOTALL)
+            txt_busca = bloco_t.group(1) if bloco_t else texto_upper
+            
+            m_cnpj = re.search(r'CNPJ[/\s]*CPF\s*[:\-]?\s*(\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}|\d{11,14})', txt_busca)
+            m_nome = re.search(r'RAZ[AÃ]O\s+SOCIAL\s*[:\-]?\s*([A-Z0-9\s.\-&]{5,})', txt_busca)
+            
+            if m_cnpj and m_nome:
+                nome_ret = m_nome.group(1).split('\n')[0].strip()
+                cnpj_ret = _limpa_cnpj(m_cnpj.group(1))
+                nome_ret = re.split(r'\s{2,}|ENDERE[CÇ]O|CNPJ', nome_ret)[0].strip()
+                if len(cnpj_ret) in (11, 14):
+                    return nome_ret, cnpj_ret
+
+        # ── 3. NFe (DANFE) ──────────────────────────────────────────────────────
+        if "DESTINAT" in texto_upper:
+            # Padrão NFe: Nome e CNPJ estão no bloco DESTINATÁRIO / REMETENTE
+            # Usamos . para aceitar Á em DESTINATÁRIO
+            bloco_d = re.search(r'DESTINAT.RIO\s*/\s*REMETENTE(.*?)(?:FATURA|DUPLICATAS|C[AÁ]LCULO DO IMPOSTO|ENDERE[CÇ]O|$)', texto_upper, re.DOTALL)
+            if bloco_d:
+                txt_d = bloco_d.group(1)
+                
+                # Busca CNPJ formatado (XX.XXX.XXX/XXXX-XX) ou 14 dígitos
+                m_cnpj = re.search(r'(\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}|\d{11,14})', txt_d)
+
+                if m_cnpj:
+                    cnpj_ret = _limpa_cnpj(m_cnpj.group(0)) # group(0) matches the whole match
+                    
+                    # O nome costuma estar ANTES do CNPJ no layout DANFE
+                    txt_pre = txt_d[:m_cnpj.start()]
+                    # Remove labels comuns (usamos . para evitar problemas de encoding com Ã/Á)
+                    txt_pre = re.sub(r'NOME\s*/\s*RAZ.O\s+SOCIAL|CNPJ\s*/\s*CPF|DATA\s+DA\s+EMISS.O', ' ', txt_pre)
+                    
+                    # Busca sequências de palavras em maiúsculas que pareçam um nome
+                    nomes = re.findall(r'([A-Z][A-Z0-9\s&.\-]{5,})', txt_pre)
+                    if nomes:
+                        # O último nome encontrado antes do CNPJ costuma ser o do Tomador
+                        nome_ret = nomes[-1].strip()
+                        if len(nome_ret) > 3:
+                            return nome_ret, cnpj_ret
+
+        
+        return None, None
+
+
     def extrair_meta_documento(self, filepath, cnpj_alvo, nome_alvo, nf_alvo, vencimento_alvo, extra_context=None):
         """Extrai todos os metadados matemáticos e de identidade do arquivo."""
         meta = {
@@ -172,6 +239,8 @@ class MailScanner:
         }
         texto = self._extrair_texto_arquivo(filepath)
         fname_limpo = os.path.basename(filepath).lower()
+        
+        meta['texto_extraido'] = texto # Armazena para uso proativo
         
         # Consolida tudo o que temos para pesquisar: texto do arquivo + assunto do e-mail (contexto)
         todo_texto = (texto or "") + " " + (extra_context or "")
@@ -201,26 +270,119 @@ class MailScanner:
             print(f"      [DEBUG] CNPJs Encontrados: {cnpjs_limpos}")
             print(f"      [DEBUG] Texto (primeiros 100): {texto[:100] if texto else 'VAZIO'}")
 
-        # CNPJ do Emitter (Credos/Servsolda) - Sempre ignoramos como alvo
-        cnpj_proprio = "54804458000122"
-        
-        # Se existe um CNPJ que nao o nosso e NAO o do cliente, temos um CONFLITO
-        # Mas s marcamos conflito SE no encontrarmos o CNPJ do cliente no mesmo arquivo
-        encontrou_alvo = (cnpj_alvo_limpo and cnpj_alvo_limpo in cnpjs_limpos)
-        
-        for c in cnpjs_limpos:
-            if c != cnpj_proprio:
-                if cnpj_alvo_limpo and c != cnpj_alvo_limpo and not encontrou_alvo:
+        # ─── CNPJs PRÓPRIOS DO SISTEMA (EMITENTES) ──────────
+        # Todos os CNPJs cadastrados no Credos são emitentes — nunca destinatários.
+        # Buscamos do banco para ser dinâmico (suporta novas empresas cadastradas).
+        cnpjs_proprios = {"54804458000122", "11504286000169"}  # fallback estático
+        try:
+            from src.database import carregar_todas_unidades_db
+            for u in (carregar_todas_unidades_db() or []):
+                cnpj_u = re.sub(r'\D', '', str(u.get('empresa_cnpj', '')))
+                if cnpj_u:
+                    cnpjs_proprios.add(cnpj_u)
+        except Exception:
+            pass  # fallback estático já está definido
+
+        # ─── NOMES DE CAMPOS DE BOLETO (FALSOS POSITIVOS) ──────────
+        # Esses termos aparecem logo após "PAGADOR" em boletos e NÃO são nomes de clientes.
+        NOMES_FALSO_POSITIVO = {
+            'NOSSO NÚMERO', 'NOSSO NUMERO', 'BANCO', 'AGÊNCIA', 'AGENCIA',
+            'CONTA', 'VENCIMENTO', 'VALOR', 'CEDENTE', 'SACADO',
+            'COMPENSAÇÃO', 'COMPENSACAO', 'LOCAL DE PAGAMENTO', 'DATA',
+        }
+
+        # ─── EXTRAÇÃO DE IDENTIDADE REFORÇADA (ANTI-VAZAMENTO) ──────────
+        cnpj_destinatario = None
+        nome_destinatario = None
+
+        if texto_upper:
+            # 1. Busca CNPJ do Destinatário no bloco do SACADO/PAGADOR
+            #    Usamos janela pequena (300 chars) para evitar capturar o CNPJ do emitente
+            padroes_cnpj_sacado = [
+                r'SACADO[:\s]+([A-Z0-9 .]+?)\s+CNPJ[/CPF:\s]*(\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2})',
+                r'PAGADOR[:\s]+([A-Z0-9 .]+?)\s+CNPJ[/CPF:\s]*(\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2})',
+                r'DESTINAT[A-Z]*/REMETENTE[:\s]+([A-Z0-9 .]+?)\s+CNPJ[/CPF:\s]*(\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2})',
+            ]
+            for pat in padroes_cnpj_sacado:
+                m_c = re.search(pat, texto_upper)
+                if m_c:
+                    nome_cand = m_c.group(1).strip()
+                    cnpj_cand = re.sub(r'\D', '', m_c.group(2))
+                    # Só aceita se o CNPJ candidato NÃO for um dos nossos emitentes
+                    if cnpj_cand not in cnpjs_proprios:
+                        cnpj_destinatario = cnpj_cand
+                        # Só aceita o nome se não for um campo de boleto falso-positivo
+                        if nome_cand.upper() not in NOMES_FALSO_POSITIVO:
+                            nome_destinatario = nome_cand
+                    break
+
+            # 2. Fallback: busca nome do sacado sem CNPJ confirmado
+            if not nome_destinatario:
+                match_nome = re.search(
+                    r'(?:SACADO|PAGADOR|DESTINAT[A-Z]*/REMETENTE)[:\s]+([A-Z][A-Z0-9 .&-]{4,60})',
+                    texto_upper
+                )
+                if match_nome:
+                    cand = match_nome.group(1).strip().rstrip()
+                    if cand.upper() not in NOMES_FALSO_POSITIVO and len(cand) > 4:
+                        nome_destinatario = cand
+
+        # ─── VERIFICAÇÃO DE CONFLITO LGPD (CRITÉRIO RIGOROSO) ──────────
+        encontrou_alvo_cnpj = (cnpj_alvo_limpo and (cnpj_alvo_limpo in cnpjs_limpos or cnpj_alvo_limpo == cnpj_destinatario))
+
+        # Só bloqueia por CNPJ se o CNPJ detectado for claramente de um TERCEIRO
+        # (não nosso, e diferente do alvo). CNPJs de emitentes são ignorados.
+        if cnpj_destinatario and cnpj_alvo_limpo:
+            if cnpj_destinatario in cnpjs_proprios:
+                print(f"      [LGPD] CNPJ detectado ({cnpj_destinatario}) é emitente próprio — ignorando.")
+            elif cnpj_destinatario != cnpj_alvo_limpo:
+                meta['conflito_identidade'] = True
+                print(f"      [LGPD] BLOQUEIO: Destinatário CNPJ ({cnpj_destinatario}) != Alvo ({cnpj_alvo_limpo})")
+
+        # Bloqueia por nome apenas se temos um nome de destinatário VÁLIDO (não campo de boleto)
+        if nome_destinatario and nome_alvo and nome_destinatario.upper() not in NOMES_FALSO_POSITIVO:
+            n_alvo_clean = re.sub(r'[^A-Z]', '', str(nome_alvo).upper())
+            n_dest_clean = re.sub(r'[^A-Z]', '', str(nome_destinatario).upper())
+            if len(n_dest_clean) > 5 and n_alvo_clean not in n_dest_clean and n_dest_clean not in n_alvo_clean:
+                # Se o CNPJ JÁ BATEU, não bloqueamos por nome (pode ser variação tipo TECAR vs TECAR BRASILIA)
+                if not encontrou_alvo_cnpj:
                     meta['conflito_identidade'] = True
-                elif not cnpj_alvo_limpo:
-                    # Se no temos o CNPJ do cliente no banco, qualquer CNPJ estranho e um risco
-                    pass
+                    print(f"      [LGPD] BLOQUEIO: Destinatário Nome ({nome_destinatario}) != Alvo ({nome_alvo})")
+                else:
+                    print(f"      [LGPD] Nome difere ({nome_destinatario} vs {nome_alvo}), mas CNPJ confirmou identidade. Ignorando conflito de nome.")
+
+        # ─── PERTENCIMENTO POSITIVO ──────────
+        # Se o CNPJ ou o Nome baterem perfeitamente, marcamos como pertencente
+        if encontrou_alvo_cnpj:
+            meta['pertence_cliente'] = True
+        
+        if not meta['pertence_cliente'] and nome_alvo:
+            # Busca o nome curto ou o nome completo no texto todo
+            def normalizar(t): return re.sub(r'[^A-Z0-9]', '', str(t).upper())
+            texto_norm = normalizar(texto_upper)
+            nome_norm = normalizar(nome_alvo)
+            if nome_norm and len(nome_norm) > 4 and nome_norm in texto_norm:
+                meta['pertence_cliente'] = True
+            else:
+                # Tenta pelo nome curto (primeiras 2 palavras)
+                n_curto = normalizar(" ".join(nome_alvo.upper().split()[:2]))
+                if n_curto and len(n_curto) > 4 and n_curto in texto_norm:
+                    meta['pertence_cliente'] = True
+
+        for c in cnpjs_limpos:
+            if c not in cnpjs_proprios:
+                if cnpj_alvo_limpo:
+                    if c == cnpj_alvo_limpo:
+                        meta['cnpj_detectado'] = c
+                else:
+                    if cnpj_destinatario: meta['cnpj_detectado'] = cnpj_destinatario
+                    elif not meta['cnpj_detectado']: meta['cnpj_detectado'] = c
 
         nome_curto = " ".join(nome_alvo.upper().split()[:2]) if nome_alvo else ""
         primeiro_nome = nome_alvo.upper().split()[0] if nome_alvo else ""
 
         # 1. Identidade Positiva Forte (CNPJ)
-        if encontrou_alvo:
+        if encontrou_alvo_cnpj:
             meta['pertence_cliente'] = True
         
         # Identidade Flexivel (Nome) - Apenas se o CNPJ não foi conclusivo
@@ -230,15 +392,60 @@ class MailScanner:
             texto_norm = normalizar(texto_upper)
             fname_norm = normalizar(fname_limpo)
             nome_norm = normalizar(nome_alvo)
-            nome_curto_norm = normalizar(nome_curto)
-            p_nome_norm = normalizar(primeiro_nome)
+            # Exige pelo menos 2 palavras para o nome curto e pelo menos 6 caracteres
+            partes_nome = nome_alvo.upper().split()
+            nome_curto_norm = normalizar(" ".join(partes_nome[:2])) if len(partes_nome) >= 2 else ""
+            
+            # Match por nome completo
+            if nome_norm and len(nome_norm) > 5 and (nome_norm in texto_norm or nome_norm in fname_norm):
+                meta['pertence_cliente'] = True
+            # Match por nome curto (2 primeiras palavras) - mais seguro que primeiro nome apenas
+            elif nome_curto_norm and len(nome_curto_norm) >= 6 and (nome_curto_norm in texto_norm or nome_curto_norm in fname_norm):
+                meta['pertence_cliente'] = True
 
-            if (nome_curto_norm and len(nome_curto_norm) > 4 and (nome_curto_norm in texto_norm or nome_curto_norm in fname_norm)):
-                meta['pertence_cliente'] = True
-            elif (p_nome_norm and len(p_nome_norm) >= 4 and (p_nome_norm in texto_norm or p_nome_norm in fname_norm)):
-                meta['pertence_cliente'] = True
-            elif (nome_norm and nome_norm in texto_norm):
-                meta['pertence_cliente'] = True
+        # ── VERIFICAÇÃO FORTE: Campos rotulados NFe / NFS-e / Fatura ────────────
+        # Extrai nome+CNPJ dos campos EXATOS do documento e cruza com o cadastro.
+        # Esta camada tem prioridade: confirma ou bloqueia com alta precisão.
+        if texto_upper and (nome_alvo or cnpj_alvo_limpo):
+            nome_tomador, cnpj_tomador = self._extrair_identidade_tomador(texto_upper)
+            if nome_tomador or cnpj_tomador:
+                def _norm(t): return re.sub(r'[^A-Z0-9]', '', str(t).upper())
+                cnpj_match = bool(cnpj_tomador and cnpj_alvo_limpo and cnpj_tomador == cnpj_alvo_limpo)
+                nome_match = False
+                if nome_tomador and nome_alvo:
+                    n_doc  = _norm(nome_tomador)
+                    n_alvo = _norm(nome_alvo)
+                    n_alvo_curto = _norm(' '.join(nome_alvo.upper().split()[:2]))
+                    nome_match = (
+                        (n_alvo and n_alvo in n_doc) or
+                        (n_doc  and n_doc  in n_alvo) or
+                        (n_alvo_curto and len(n_alvo_curto) > 4 and n_alvo_curto in n_doc)
+                    )
+
+                if cnpj_match or nome_match:
+                    # Confirmação positiva forte — campo rotulado bateu com o cadastro
+                    meta['pertence_cliente'] = True
+                    meta['conflito_identidade'] = False
+                    print(f"      [ID ✅] Tomador confirmado via campo rotulado: '{nome_tomador}' / {cnpj_tomador}")
+                elif cnpj_tomador and cnpj_alvo_limpo and cnpj_tomador not in cnpjs_proprios:
+                    # CNPJ de terceiro no campo rotulado — bloqueio definitivo
+                    meta['conflito_identidade'] = True
+                    meta['pertence_cliente'] = False
+                    print(f"      [LGPD 🚫] Tomador '{nome_tomador}' / {cnpj_tomador} != alvo '{nome_alvo}' / {cnpj_alvo_limpo}")
+                elif nome_tomador and nome_alvo:
+                    # Só tem nome (sem CNPJ confirmado) — nome diferente = bloqueia
+                    n_doc  = _norm(nome_tomador)
+                    n_alvo = _norm(nome_alvo)
+                    partes_alvo = str(nome_alvo).upper().split()
+                    n_curto = _norm(' '.join(partes_alvo[:2])) if len(partes_alvo) >= 2 else ""
+
+                    
+                    # Se o nome extraído do campo "Tomador" é longo e não contém o alvo, bloqueia
+                    if len(n_doc) > 6 and n_alvo not in n_doc and n_doc not in n_alvo and (not n_curto or n_curto not in n_doc):
+                        meta['conflito_identidade'] = True
+                        meta['pertence_cliente'] = False
+                        print(f"      [LGPD 🚫] Conflito de Nome Tomador: '{nome_tomador}' != '{nome_alvo}'")
+
 
         # 2. Nmero da NF (Sniper de Preciso)
         if nf_alvo:
@@ -252,9 +459,10 @@ class MailScanner:
                 if n_extraido: nfs_reais_na_chave.append(n_extraido)
             
             if nfs_reais_na_chave:
-                if any(n == nf_search for n in nfs_reais_na_chave):
+                meta['nf_detectada'] = nfs_reais_na_chave[0]
+                if nf_alvo and any(n == nf_search for n in nfs_reais_na_chave):
                     meta['tem_nf'] = True
-                else:
+                elif nf_alvo:
                     meta['outra_nf_detectada'] = nfs_reais_na_chave[0]
             
             # Busca de nmero solto (Apenas se no tem chave conflitante)
@@ -292,6 +500,49 @@ class MailScanner:
 
     def baixar_anexos_por_nf_validado(self, numero_nf, cnpj_cliente, nome_cliente, vencimento=None, valor=None):
         """Nova Lgica de Pooling: Busch Produto + Servio e Deduplica arquivos."""
+        # ─── FASE 0: VERIFICAÇÃO EM REPOSITÓRIO LOCAL (DB) ──────────
+        # Se o ProactiveScanner já indexou, não precisamos gastar tempo/processamento no IMAP
+        try:
+            from src.database import conectar as conectar_local
+            cnpj_empresa = self.user.split('@')[0] if self.user else "" # Heurística simples ou busca global
+            # Na verdade, o MailScanner já tem as credenciais. Vamos tentar conectar ao banco da empresa dona.
+            # O ideal é que o MailScanner receba o CNPJ da empresa dona no __init__
+            # Mas como fallback, vamos tentar achar qual banco tem esse email_user
+            conn_c = conectar_local()
+            res_c = conn_c.cursor().execute("SELECT empresa_cnpj FROM unidades").fetchall()
+            conn_c.close()
+            
+            for r in res_c:
+                emp_cnpj = r[0]
+                conn_emp = conectar_local(emp_cnpj)
+                c_emp = conn_emp.cursor()
+                # Busca por NF e CNPJ do Cliente (Se tiver)
+                nf_search = str(numero_nf).lstrip('0')
+                query = "SELECT fpath_local FROM documentos_fiscais WHERE num_nf = ?"
+                params = [nf_search]
+                
+                # Se o CNPJ do cliente foi passado, refinamos
+                if cnpj_cliente:
+                    cnpj_clean = re.sub(r'\D', '', str(cnpj_cliente))
+                    query += " AND cnpj_cliente = ?"
+                    params.append(cnpj_clean)
+                
+                rows = c_emp.execute(query, params).fetchall()
+                conn_emp.close()
+                
+                arquivos_locais = []
+                for row in rows:
+                    p = row[0]
+                    if p and os.path.exists(p):
+                        arquivos_locais.append(p)
+                
+                if arquivos_locais:
+                    print(f"   ✅ [Cache DB] Encontrado(s) {len(arquivos_locais)} arquivo(s) localmente para NF {numero_nf}")
+                    return arquivos_locais
+        except Exception as e_db:
+            print(f"   ⚠️ Erro ao consultar cache de documentos: {e_db}")
+
+        # ─── FASE 1: BUSCA IMAP (FALLBACK) ──────────────────────────
         mail = self.conectar()
         if not mail: return []
 
@@ -310,7 +561,7 @@ class MailScanner:
                 except: pass
 
         pastas_candidatas = [
-            'INBOX', '[Gmail]/Sent Mail', 'Sent', '[Gmail]/Sent', 'Enviados', 'Itens Enviados', '[Gmail]/Todos os e-mails'
+            'INBOX', '[Gmail]/Sent Mail', 'Sent', '[Gmail]/Sent', 'Enviados', 'Itens Enviados'
         ]
 
         pool_metadados = []
@@ -321,6 +572,7 @@ class MailScanner:
         # ISOLAMENTO: Cada busca usa sua prpria subpasta nica para evitar
         # que a limpeza de uma NF apague os arquivos de outra NF.
         import uuid
+        from datetime import datetime, timedelta
         pasta_destino_isolada = os.path.join(self.pasta_destino, f"nf_{nf_str}_{uuid.uuid4().hex[:8]}")
         os.makedirs(pasta_destino_isolada, exist_ok=True)
 
@@ -329,52 +581,100 @@ class MailScanner:
             pastas_reais = [f.decode().split('"/"')[-1].strip().replace('"', '') for f in folders]
             todas_pastas = list(set(pastas_candidatas + pastas_reais))
             
+            # Remove pastas que contêm todos os emails (muito grandes para busca de BODY)
+            todas_pastas = [p for p in todas_pastas if 'todos os e-mails' not in p.lower() and 'all mail' not in p.lower()]
+            
             print(f"--- [Pooling] Iniciando busca para NF {nf_str} (Alvos: {alvos_validos})...", flush=True)
 
-            # --- ETAPA 1: Busca por Nmero de NF (Corpo e Assunto) ---
+            # Filtro de data: últimos 180 dias para evitar travamento em buscas de BODY
+            data_limite = (datetime.now() - timedelta(days=180)).strftime("%d-%b-%Y")
+            search_prefix = f'SINCE "{data_limite}"'
+
+            # --- ETAPA 1: Busca por Número de NF (Corpo e Assunto) ---
             ids_candidatos = []
             for pasta in todas_pastas:
                 if any(x in pasta.lower() for x in ['spam', 'trash', 'lixeira', 'drafts']): continue
                 if not self._selecionar_pasta_segura(mail, pasta): continue
                 
-                # Procura NF no assunto ou corpo (geralmente pega o nome do anexo)
-                typ, data = mail.search(None, f'(OR SUBJECT "{nf_str}" BODY "{nf_str}")')
+                # Busca 1: NF no Assunto
+                typ, data = mail.search(None, f'{search_prefix} SUBJECT "{nf_str}"')
                 if data[0]: ids_candidatos.extend([(pasta, mid) for mid in data[0].split()])
                 
-                if not data[0] and nf_str != nf_sem_zero:
-                    typ, data = mail.search(None, f'(OR SUBJECT "{nf_sem_zero}" BODY "{nf_sem_zero}")')
+                # Busca 2: NF no Corpo
+                typ, data = mail.search(None, f'{search_prefix} BODY "{nf_str}"')
+                if data[0]: ids_candidatos.extend([(pasta, mid) for mid in data[0].split()])
+                
+                if nf_str != nf_sem_zero:
+                    typ, data = mail.search(None, f'{search_prefix} SUBJECT "{nf_sem_zero}"')
                     if data[0]: ids_candidatos.extend([(pasta, mid) for mid in data[0].split()])
+                    typ, data = mail.search(None, f'{search_prefix} BODY "{nf_sem_zero}"')
+                    if data[0]: ids_candidatos.extend([(pasta, mid) for mid in data[0].split()])
+
+            if not ids_candidatos:
+                print(f"   ⚠️ Nenhuma mensagem encontrada com NF {nf_str}. Tentando por Nome/CNPJ...")
 
             # --- ETAPA 2: Busca por CNPJ e Nome do Cliente (Ampla) ---
             cnpj_limpo = re.sub(r'\D', '', str(cnpj_cliente)) if cnpj_cliente else ""
-            nome_curto = " ".join(str(nome_cliente).upper().split()[:2]) if nome_cliente else ""
+            nome_parts = str(nome_cliente).upper().split()
+            nome_curto = " ".join(nome_parts[:2]) if len(nome_parts) >= 2 else (nome_parts[0] if nome_parts else "")
+            nome_busca_3 = " ".join(nome_parts[:3]) if len(nome_parts) >= 3 else nome_curto
             
-            for pasta in ['INBOX', '[Gmail]/Sent Mail', 'Sent', 'Enviados']:
+            print(f"   [Debug] Termos: CNPJ={cnpj_limpo} | NomeCurto={nome_curto} | Nome3={nome_busca_3}")
+            
+            pastas_busca_ampla = ['INBOX', '[Gmail]/Sent Mail', 'Sent', 'Enviados', 'Itens Enviados', 'Sent Items']
+            for pasta in pastas_busca_ampla:
                 if not self._selecionar_pasta_segura(mail, pasta): continue
                 
+                # Busca por CNPJ
                 if cnpj_limpo and len(cnpj_limpo) > 10:
-                    typ, data = mail.search(None, f'(OR SUBJECT "{cnpj_limpo}" BODY "{cnpj_limpo}")')
+                    typ, data = mail.search(None, f'{search_prefix} (OR SUBJECT "{cnpj_limpo}" BODY "{cnpj_limpo}")')
                     if data[0]:
-                        for mid in sorted(data[0].split(), reverse=True)[:10]: ids_candidatos.append((pasta, mid))
+                        found = data[0].split()
+                        print(f"      [Debug] Pasta {pasta}: {len(found)} emails por CNPJ")
+                        for mid in sorted(found, reverse=True)[:10]: ids_candidatos.append((pasta, mid))
                 
-                if nome_curto and len(nome_curto) > 4:
-                    # Se no foi, tenta pelo nome curto do cliente no corpo
-                    typ, data = mail.search(None, f'(BODY "{nome_curto}")')
+                # Busca por Nome (3 palavras ou 2)
+                termos_nome = [nome_busca_3, nome_curto]
+                for termo in termos_nome:
+                    if not termo or len(termo) < 4: continue
+                    typ, data = mail.search(None, f'{search_prefix} SUBJECT "{termo}"')
                     if data[0]:
-                        for mid in sorted(data[0].split(), reverse=True)[:10]: ids_candidatos.append((pasta, mid))
+                        found = data[0].split()
+                        print(f"      [Debug] Pasta {pasta}: {len(found)} emails por Nome Assunto ({termo})")
+                        for mid in sorted(found, reverse=True)[:10]: ids_candidatos.append((pasta, mid))
+                    
+                    typ, data = mail.search(None, f'{search_prefix} BODY "{termo}"')
+                    if data[0]:
+                        found = data[0].split()
+                        print(f"      [Debug] Pasta {pasta}: {len(found)} emails por Nome Corpo ({termo})")
+                        for mid in sorted(found, reverse=True)[:10]: ids_candidatos.append((pasta, mid))
 
-            # Consolida e-mails nicos para processar
+            # --- ETAPA 3: LAST RESORT (SCAN RECENTES) ---
+            if not ids_candidatos:
+                print("   ⚠️ Sem resultados. Ativando Busca de Último Recurso (Últimos 50 emails)...")
+                for pasta in ['INBOX', '[Gmail]/Sent Mail', 'Sent', 'Enviados']:
+                    if not self._selecionar_pasta_segura(mail, pasta): continue
+                    typ, data = mail.search(None, 'ALL')
+                    if data[0]:
+                        recentes = data[0].split()[-50:]
+                        for mid in recentes: ids_candidatos.append((pasta, mid))
+
+            # Consolida e-mails únicos para processar
             ids_unicos = []
             seen_ids = set()
             for p, mid in ids_candidatos:
-                if mid not in seen_ids:
+                if (p, mid) not in seen_ids:
                     ids_unicos.append((p, mid))
-                    seen_ids.add(mid)
+                    seen_ids.add((p, mid))
             
-            # Processamento de Anexos do Pool (aumentado para 25 e-mails)
-            for pasta, e_id in ids_unicos[:25]:
+            print(f"   🔎 Total de {len(ids_unicos)} mensagens em análise profunda.")
+
+            # Processamento de Anexos do Pool
+            for pasta, e_id in ids_unicos[:50]:
                 if not self._selecionar_pasta_segura(mail, pasta): continue
-                _, msg_data = mail.fetch(e_id, "(RFC822)")
+                try:
+                    _, msg_data = mail.fetch(e_id, "(RFC822)")
+                except: continue
                 if not msg_data or not msg_data[0]: continue
                 
                 msg = email.message_from_bytes(msg_data[0][1])
@@ -395,24 +695,20 @@ class MailScanner:
                     fname = part.get_filename()
                     if fname:
                         fname_clean = self.limpar_nome_arquivo(fname)
-                        
-                        # DEDUPLICAO REAL: Pelo nome do arquivo limpo. Se j baixamos o "boleto.pdf", no baixamos de novo
                         if fname_clean.lower() in seen_nomes_originais: continue
                         seen_nomes_originais.add(fname_clean.lower())
 
-                        fpath = os.path.join(pasta_destino_isolada, f"{nf_str}_{e_id.decode()}_{fname_clean}")
+                        # REMOVIDO PREFIXO nf_str: Evita o bug de "match circular"
+                        fpath = os.path.join(pasta_destino_isolada, fname_clean)
                         with open(fpath, "wb") as f:
-
                             f.write(part.get_payload(decode=True))
                         
                         meta = self.extrair_meta_documento(fpath, cnpj_cliente, nome_cliente, nf_str, vencimento)
                         meta['fpath'] = fpath
                         meta['nome_original'] = fname_clean
-                        
                         meta['email_id'] = str(e_id.decode())
                         
-                        # NOVIDADE: No deletamos mais nada antecipadamente. 
-                        # Mantemos todos os candidatos para a filtragem "Sniper" final.
+                        print(f"      [Pool] Arquivo: {fname_clean} | NF detectada: {meta.get('nf_detectada')} | Pertence: {meta.get('pertence_cliente')} | Conflito: {meta.get('conflito_identidade')}")
                         pool_metadados.append(meta)
                         arquivos_temp_lot.append(fpath)
 
@@ -429,70 +725,73 @@ class MailScanner:
             for m in pool_metadados:
                 bname = os.path.basename(m['fpath'])
                 eh_nf_confirmada = False
-
                 nome_orig = m.get('nome_original', bname)
-                # Regra 1: Identificao por NF + Cliente (Foguete)
-                if (nf_num in nome_orig or m.get('tem_nf')) and m.get('pertence_cliente'):
-                    eh_nf_confirmada = True
-                    identidade_ok = True # Identidade confirmada pelo match duplo
-                elif nf_num in nome_orig or m.get('tem_nf'):
-                     # Candidato por nmero, mas precisa validar identidade
-                    eh_nf_confirmada = True
-                    identidade_ok = False
+
+                # Regra de Ouro: Match de Número de NF
+                # CUIDADO: O nf_num pode aparecer no cNF (últimos 9 dígitos da chave de acesso).
+                # Ex: chave ...000001286 1 000051237 → o '1237' está no cNF, NÃO é a NF 1237.
+                # Solução: para arquivos com chave de acesso no nome (44 dígitos), só aceita
+                # match se o nf_num estiver nos dígitos 25-34 da chave (posição do nNF).
+                chave_no_nome = re.search(r'(\d{44})', nome_orig)
+                if chave_no_nome:
+                    nf_da_chave = chave_no_nome.group(1)[25:34].lstrip('0')
+                    nf_match_nome = (nf_da_chave == nf_num)  # Só aceita se for o nNF exato
                 else:
-                    # Tenta via Chave SEFAZ
-                    chaves_no_nome = re.findall(r'\d{42,44}', nome_orig)
-                    if chaves_no_nome:
-                        for chave in chaves_no_nome:
-                            try:
-                                if str(int(chave[25:34])) == nf_num:
-                                    eh_nf_confirmada = True
-                                    identidade_ok = m.get('pertence_cliente', False)
-                            except: pass
-                    if chaves_no_nome:
-                        for chave in chaves_no_nome:
-                            # Tenta extrair a NF da posição padrão (25:34) ou aproximada
-                            try:
-                                nf_na_chave = str(int(chave[25:34]))
-                                if nf_na_chave == nf_num:
-                                    eh_nf_confirmada = True
-                            except: pass
+                    # Arquivo sem chave de acesso no nome (boletos, faturas, etc.)
+                    # Aceita se o número aparecer delimitado (não dentro de outro número)
+                    nf_match_nome = bool(re.search(rf'(?<!\d){re.escape(nf_num)}(?!\d)', nome_orig))
+
+                nf_match = nf_match_nome or m.get('tem_nf', False)
+                
+                # BINGO: Se o Número da NF bate E a Identidade bate → APROVADO
+                # Regra de Segurança Máxima [LGPD]: Para arquivos fiscais (PDF/XML), o match de Valor/Vencimento NÃO é suficiente.
+                # EXIGIMOS que o Nome ou CNPJ no documento coincida com o cadastro.
+                
+                if nf_match:
+                    # Bloqueio de Segurança: Se detectou outra identidade (conflito), para tudo.
+                    if m.get('conflito_identidade', False):
+                        print(f"    [LGPD 🚫] BLOQUEIO CRÍTICO: NF {nf_num} pertence a OUTRO cliente. Descartando {bname}")
+                        continue
+
+                    # Critério de Aprovação:
+                    # 1. Se for PDF/XML (Documento Fiscal), EXIGE identidade confirmada.
+                    # 2. Se for outro tipo (Boleto genérico), aceita Valor ou Vencimento como prova.
+                    ext = os.path.splitext(m['fpath'])[1].lower()
+                    if ext in ['.pdf', '.xml']:
+                        if identidade_match:
+                            arquivos_aprovados.add(m['fpath'])
+                            emails_com_nf_confirmada.add(m['email_id'])
+                            print(f"    ✅ BINGO IDENTIDADE: NF {nf_num} confirmada para {cliente_nome}")
+                        else:
+                            print(f"    [LGPD ⚠️] NF {nf_num} encontrada ({bname}), mas identidade não confirmada no documento. Ignorando.")
+                    else:
+                        # Boletos/Faturas de texto simples: aceita evidências matemáticas se não houver conflito
+                        if identidade_match or valor_match or venc_match:
+                            arquivos_aprovados.add(m['fpath'])
+                            emails_com_nf_confirmada.add(m['email_id'])
+                            print(f"    ✅ BINGO APOIO: Arquivo {bname} aprovado por valor/venc/id")
 
 
-                # CROSS-CONTAMINATION FILTER (REFORADO)
-                if eh_nf_confirmada:
-                    identidade_ok = False
-                    # Regra 1: CNPJ ou Nome batendo e aprovao instantnea
-                    if m.get('pertence_cliente', False): 
-                        identidade_ok = True
-                    
-                    # Regra 2: Se o nome confirmou (pertence_cliente), ignoramos conflitos de CNPJ menores (ex: banco/transporte)
-                    # Apenas marcamos falha se pertense_cliente for FALSO e houver conflito
-                    if not identidade_ok:
-                        if not m.get('conflito_identidade', False):
-                            if m.get('tem_vencimento', False): identidade_ok = True
-                            if alvos_validos and m.get('valores') and any((abs(v - a) < 0.1) for v in m.get('valores') for a in alvos_validos):
-                                identidade_ok = True
-                    
-                    if not identidade_ok:
-                        eh_nf_confirmada = False
-                        msg_falha = "Conflito de CNPJ" if m.get('conflito_identidade') else "Nome/Dados no conferem"
-                        print(f"    REJEITADO: {msg_falha} | {bname[:50]}")
-
-                if eh_nf_confirmada:
-                    arquivos_aprovados.add(m['fpath'])
-                    emails_com_nf_confirmada.add(m['email_id'])
-                    print(f"    NF CONFIRMADA E VALIDADA: {bname[:60]} (Email: {m['email_id']})")
 
             # Passada 2: Aprova outros arquivos (Boletos/XMLs) que esto nos mesmos e-mails aprovados
             for m in pool_metadados:
                 if m['fpath'] in arquivos_aprovados: continue
                 
                 if m['email_id'] in emails_com_nf_confirmada:
-                    # Se est no mesmo email de uma NF aprovada, e  um arquivo til, a gente deixa passar!
-                    bname = os.path.basename(m['fpath'])
+                    # Aprovação por associação: arquivo no mesmo e-mail que uma NF confirmada.
+                    # EXIGE identidade confirmada (pertence_cliente=True) E sem conflito.
+                    if m.get('conflito_identidade', False):
+                        f_name = os.path.basename(m['fpath'])
+                        print(f"    [LGPD] Bloqueio Associação: {f_name} tem conflito de identidade.")
+                        continue
+
+                    if not m.get('pertence_cliente', False):
+                        f_name = os.path.basename(m['fpath'])
+                        print(f"    [LGPD] Bloqueio Associação: {f_name} sem identidade confirmada.")
+                        continue
+
                     arquivos_aprovados.add(m['fpath'])
-                    print(f"    APROVADO POR ASSOCIAO (Mesmo e-mail da NF): {bname[:60]}")
+                    print(f"    📎 APROVADO POR ASSOCIAÇÃO: {os.path.basename(m['fpath'])}")
 
             print(f"   Total aprovado: {len(arquivos_aprovados)} arquivo(s) para NF {nf_str}")
             
