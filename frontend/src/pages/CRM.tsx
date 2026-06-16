@@ -1,7 +1,7 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { Layout } from '../components/ui/Layout';
 import { api } from '../context/AuthContext';
-import { Search, Edit2, CheckCircle2, AlertCircle, Clock, Trash2, Loader2, X, Send, FileWarning, Users, ChevronDown, Power, Sparkles, Building2, RefreshCw, FileText, FileDown, Eye } from 'lucide-react';
+import { Search, Edit2, CheckCircle2, AlertCircle, Clock, Trash2, Loader2, X, Send, FileWarning, Users, ChevronDown, ChevronUp, Power, Sparkles, Building2, RefreshCw, FileText, FileDown, Eye, Upload, PlusCircle, Landmark } from 'lucide-react';
 
 interface Client {
   id: number;
@@ -10,6 +10,12 @@ interface Client {
   whatsapp: string;
   email: string;
   contato: string;
+  scanner_pendente?: number;
+  has_unresolved?: boolean;
+  total_cobrancas?: number;
+  cobrancas_whatsapp?: number;
+  cobrancas_email?: number;
+  cobrancas_analu?: number;
 }
 
 interface Title {
@@ -20,8 +26,10 @@ interface Title {
   valor: number;
   status: string;
   acao: string;
+  data_promessa?: string;
   data_envio_cartorio?: string;
   status_retorno_cartorio?: string;
+  total_cobranças?: number;
 }
 
 export const CRM: React.FC = () => {
@@ -32,6 +40,7 @@ export const CRM: React.FC = () => {
   const [selectedTitleIds, setSelectedTitleIds] = useState<number[]>([]);
   
   const [activeTab, setActiveTab] = useState<'carteira' | 'comprovantes'>('carteira');
+  const [headerCollapsed, setHeaderCollapsed] = useState(false);
   const [titleFilter, setTitleFilter] = useState<'pendentes' | 'pagos' | 'cartorio'>('pendentes');
   const [vouchers, setVouchers] = useState<any[]>([]);
   const [loadingVouchers, setLoadingVouchers] = useState(false);
@@ -71,6 +80,11 @@ export const CRM: React.FC = () => {
   const [docsTitle, setDocsTitle]= useState<any>(null);
   const [docsLista, setDocsLista] = useState<any[]>([]);
   const [loadingDocs, setLoadingDocs] = useState(false);
+
+  // Manual Upload State (Item 9)
+  const [uploadTipo, setUploadTipo] = useState('NFe');
+  const [uploadLoading, setUploadLoading] = useState(false);
+  const uploadInputRef = useRef<HTMLInputElement>(null);
 
   const companyCnpj = localStorage.getItem('companyCnpj') || '';
 
@@ -140,10 +154,14 @@ export const CRM: React.FC = () => {
     fetchTitles(c.nome);
   };
 
-  const updateTitleStatus = async (id: number, newStatus: string, action: string) => {
+  const updateTitleStatus = async (id: number, newStatus: string, action: string, dataPromessa?: string) => {
     setActionLoading(true);
     try {
-      await api.patch(`/crm/titles/${id}`, { status: newStatus || 'Aberto', acao: action || 'Cobrar' });
+      await api.patch(`/crm/titles/${id}`, { 
+        status: newStatus || 'Aberto', 
+        acao: action || 'Cobrar',
+        ...(dataPromessa !== undefined ? { data_promessa: dataPromessa } : {})
+      });
       if (selectedClient) fetchTitles(selectedClient.nome);
     } catch(e: any) {
       console.error(e?.response?.data || e);
@@ -232,6 +250,27 @@ export const CRM: React.FC = () => {
     }
   };
 
+  const handleCartorioClient = async () => {
+    if (!selectedClient) return;
+    const pendingTitles = titles.filter(t => t.status !== 'Pago' && t.status !== 'Cancelado');
+    if (pendingTitles.length === 0) {
+      alert('Nenhum título pendente para enviar ao cartório.');
+      return;
+    }
+    if (!window.confirm(`Enviar TODOS os ${pendingTitles.length} títulos pendentes do cliente ${selectedClient.nome} para a Fila de Cartório?`)) return;
+    
+    setActionLoading(true);
+    try {
+      const ids = pendingTitles.map(t => t.id);
+      await api.post('/cartorio/processar-massa', { titulos_ids: ids });
+      alert("Títulos adicionados à Fila do Cartório com sucesso!");
+    } catch(e) {
+      alert("Erro ao enviar para cartório em lote.");
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   const handleChargeTitle = async (id: number) => {
     setActionLoading(true);
     try {
@@ -246,8 +285,13 @@ export const CRM: React.FC = () => {
 
   const handleEditInit = () => {
     if (!selectedClient) return;
+    // Pré-preenche TODOS os campos com os dados atuais do cliente garantindo strings (evitando uncontrolled inputs nulos)
     setEditClientData({
-      contato: selectedClient.contato
+      nome: selectedClient.nome || '',
+      cnpj: selectedClient.cnpj || '',
+      email: selectedClient.email || '',
+      whatsapp: selectedClient.whatsapp || '',
+      contato: selectedClient.contato || ''
     });
     setIsEditingClient(true);
   };
@@ -301,6 +345,28 @@ export const CRM: React.FC = () => {
       }).catch(() => alert('Erro ao abrir documento.'));
     }
   };
+
+  // Upload manual de documento (Item 9)
+  const handleManualUpload = async (file: File) => {
+    if (!docsTitle) return;
+    setUploadLoading(true);
+    try {
+      const formData = new FormData();
+      formData.append('tipo', uploadTipo);
+      formData.append('arquivo', file);
+      await api.post(`/crm/titles/${docsTitle.id}/documentos/upload`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+      alert(`✅ Documento '${uploadTipo}' adicionado com sucesso!`);
+      const res = await api.get(`/crm/titles/${encodeURIComponent(docsTitle.numero_nf)}/documentos?pagador=${encodeURIComponent(docsTitle.pagador)}`);
+      setDocsLista(res.data.documentos || []);
+    } catch(e: any) {
+      alert(e?.response?.data?.detail || 'Erro ao enviar documento.');
+    } finally {
+      setUploadLoading(false);
+    }
+  };
+
 
   const handleUpdateClient = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -506,8 +572,25 @@ export const CRM: React.FC = () => {
                   onClick={() => handleSelectClient(c)}
                   className={`p-4 rounded-xl border-2 cursor-pointer transition-all duration-200 group flex justify-between items-center ${selectedClient?.id === c.id ? 'bg-primary-50 border-primary-500 dark:bg-primary-900/20 dark:border-primary-600' : 'bg-white border-transparent hover:border-slate-200 hover:bg-slate-50 dark:bg-dark-surface dark:border-transparent dark:hover:border-dark-border dark:hover:bg-dark-bg/50'}`}
                 >
-                  <div className="max-w-[85%]">
-                    <div className="font-bold text-slate-900 dark:text-white truncate group-hover:text-primary-600 transition-colors">{c.nome}</div>
+                  <div className="max-w-[85%] flex-1">
+                    <div className={`font-bold truncate transition-colors flex items-center gap-2 ${
+                      c.has_unresolved && c.total_cobrancas && c.total_cobrancas > 0
+                        ? 'text-red-600 dark:text-red-400 group-hover:text-red-700' 
+                        : 'text-slate-900 dark:text-white group-hover:text-primary-600'
+                    }`}>
+                      {c.nome}
+                      {c.total_cobrancas !== undefined && c.total_cobrancas > 0 && (
+                        <span title={`Cobrado ${c.total_cobrancas} vezes`} className="flex-shrink-0 inline-flex items-center justify-center px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider bg-red-50 text-red-500 border border-red-100 dark:bg-red-950/20 dark:text-red-400 dark:border-red-900/50">
+                          {c.total_cobrancas} cobr.
+                        </span>
+                      )}
+                      {c.scanner_pendente === 1 && (
+                        <span title="Cliente adicionado pelo Scanner. Verifique os contatos (WhatsApp/E-mail)." className="flex-shrink-0 inline-flex items-center justify-center px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider bg-red-100 text-red-600 border border-red-200">
+                          <AlertCircle size={10} className="mr-1" />
+                          Revisar Contato
+                        </span>
+                      )}
+                    </div>
                     <div className="text-xs text-slate-500 dark:text-slate-400 font-mono mt-0.5">{c.cnpj}</div>
                   </div>
                   {selectedClient?.id === c.id && <div className="w-2 h-2 rounded-full bg-primary-500 animate-pulse"></div>}
@@ -516,56 +599,115 @@ export const CRM: React.FC = () => {
             )}
           </div>
         </div>
-
+ 
         {/* TITLES AREA */}
         <div className="card col-span-1 lg:col-span-2 lg:h-[calc(100vh-8rem)] h-auto min-h-[500px] flex flex-col p-0 overflow-hidden shadow-lg border-slate-200/60 dark:border-dark-border">
           {selectedClient ? (
             <>
-              <div className="p-4 lg:p-8 border-b border-slate-200 dark:border-dark-border bg-white dark:bg-dark-surface flex flex-col md:flex-row justify-between items-start gap-4">
-                <div className="space-y-1 w-full lg:w-auto">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="px-2 py-0.5 bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400 rounded text-[10px] font-bold uppercase tracking-wider">Cliente Selecionado</span>
+              <div className="p-4 lg:p-6 border-b border-slate-200 dark:border-dark-border bg-white dark:bg-dark-surface flex flex-col justify-between items-start gap-4">
+                <div className="space-y-1 w-full">
+                  <div className="flex items-center justify-between w-full">
+                    <div className="flex items-center gap-2">
+                      <span className="px-2 py-0.5 bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400 rounded text-[10px] font-bold uppercase tracking-wider">Cliente Selecionado</span>
+                    </div>
+                    <button 
+                      onClick={() => setHeaderCollapsed(!headerCollapsed)} 
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-xs font-bold text-slate-600 dark:text-slate-300 transition-all shadow-sm"
+                      title={headerCollapsed ? "Expandir painel do cliente" : "Recolher painel do cliente"}
+                    >
+                      {headerCollapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+                      {headerCollapsed ? "Mostrar Detalhes" : "Ocultar Detalhes"}
+                    </button>
                   </div>
                   <h2 className="text-xl lg:text-2xl font-black text-slate-900 dark:text-white leading-tight break-words">{selectedClient.nome}</h2>
-                  <div className="flex flex-wrap gap-4 mt-3 text-sm text-slate-600 dark:text-slate-400">
-                    <span className="flex items-center gap-1.5"><strong className="font-semibold text-slate-900 dark:text-slate-300">CNPJ:</strong> {selectedClient.cnpj}</span>
-                    <span className="flex items-center gap-1.5"><strong className="font-semibold text-slate-900 dark:text-slate-300">WhatsApp:</strong> {selectedClient.whatsapp}</span>
-                    <span className="flex items-center gap-1.5"><strong className="font-semibold text-slate-900 dark:text-slate-300">Email:</strong> {selectedClient.email}</span>
-                    <span className="flex items-center gap-1.5"><strong className="font-semibold text-slate-900 dark:text-slate-300">Contato:</strong> {selectedClient.contato}</span>
+                </div>
+
+                {!headerCollapsed && (
+                  <div className="flex flex-col xl:flex-row justify-between items-start gap-4 w-full pt-2 animate-fade-in">
+                    <div className="space-y-1 w-full lg:w-auto">
+                      <div className="flex flex-wrap gap-4 text-sm text-slate-600 dark:text-slate-400">
+                        <span className="flex items-center gap-1.5"><strong className="font-semibold text-slate-900 dark:text-slate-300">CNPJ:</strong> {selectedClient.cnpj}</span>
+                        <span className="flex items-center gap-1.5"><strong className="font-semibold text-slate-900 dark:text-slate-300">WhatsApp:</strong> {selectedClient.whatsapp}</span>
+                        <span className="flex items-center gap-1.5"><strong className="font-semibold text-slate-900 dark:text-slate-300">Email:</strong> {selectedClient.email}</span>
+                        <span className="flex items-center gap-1.5"><strong className="font-semibold text-slate-900 dark:text-slate-300">Contato:</strong> {selectedClient.contato}</span>
+                        {selectedClient.total_cobrancas !== undefined && (
+                          <span className="flex items-center gap-1.5">
+                            <strong className="font-semibold text-slate-900 dark:text-slate-300">Cobranças Enviadas:</strong>
+                            <span className={`px-2 py-0.5 rounded-full text-[11px] font-black ${
+                              selectedClient.total_cobrancas === 0 ? 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400' : 'bg-red-100 text-red-700 dark:bg-red-950/30 dark:text-red-400'
+                            }`}>
+                              {selectedClient.total_cobrancas} vez{selectedClient.total_cobrancas !== 1 ? 'es' : ''}
+                            </span>
+                          </span>
+                        )}
+                      </div>
+                      
+                      {/* Breakdown por canal */}
+                      {(selectedClient.total_cobrancas !== undefined && selectedClient.total_cobrancas > 0) && (
+                        <div className="flex flex-wrap gap-3 mt-2">
+                          {(selectedClient.cobrancas_whatsapp ?? 0) > 0 && (
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-green-50 border border-green-200 dark:bg-green-950/20 dark:border-green-800 text-green-700 dark:text-green-400 text-[11px] font-bold">
+                              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413Z"/></svg>
+                              WhatsApp: {selectedClient.cobrancas_whatsapp} vez{selectedClient.cobrancas_whatsapp !== 1 ? 'es' : ''}
+                            </span>
+                          )}
+                          {(selectedClient.cobrancas_email ?? 0) > 0 && (
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-50 border border-blue-200 dark:bg-blue-950/20 dark:border-blue-800 text-blue-700 dark:text-blue-400 text-[11px] font-bold">
+                              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>
+                              E-mail: {selectedClient.cobrancas_email} vez{selectedClient.cobrancas_email !== 1 ? 'es' : ''}
+                            </span>
+                          )}
+                          {(selectedClient.cobrancas_analu ?? 0) > 0 && (
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-purple-50 border border-purple-200 dark:bg-purple-950/20 dark:border-purple-800 text-purple-700 dark:text-purple-400 text-[11px] font-bold">
+                              ✨ Analu (IA): {selectedClient.cobrancas_analu} vez{selectedClient.cobrancas_analu !== 1 ? 'es' : ''}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    
+                    <div className="flex flex-wrap justify-end gap-2 w-full xl:w-auto mt-4 xl:mt-0">
+                      <button 
+                        onClick={handleChargeClient}
+                        disabled={actionLoading}
+                        className="flex-1 md:flex-none flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-green-600 text-white hover:bg-green-700 shadow-md transition-all font-bold disabled:opacity-50 hover:scale-[1.02] active:scale-[0.98]"
+                      >
+                        {actionLoading ? <Loader2 size={18} className="animate-spin" /> : <Clock size={18} />}
+                        Cobrar Títulos
+                      </button>
+                      <button 
+                        onClick={handleCartorioClient}
+                        disabled={actionLoading}
+                        className="flex-1 md:flex-none flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-blue-600 text-white hover:bg-blue-700 shadow-md transition-all font-bold disabled:opacity-50 hover:scale-[1.02] active:scale-[0.98]"
+                      >
+                        {actionLoading ? <Loader2 size={18} className="animate-spin" /> : <Landmark size={18} />}
+                        Tudo p/ Cartório
+                      </button>
+                      <button 
+                        onClick={handleNegotiateIA} 
+                        disabled={isNegotiating || actionLoading}
+                        className="flex-1 md:flex-none flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-primary-600 text-white hover:bg-primary-700 shadow-md transition-all font-bold disabled:opacity-50 hover:scale-[1.02] active:scale-[0.98]"
+                      >
+                        {isNegotiating ? <Loader2 size={18} className="animate-spin" /> : <Sparkles size={18} />}
+                        Negociar c/ IA
+                      </button>
+                      <button 
+                        onClick={handleEditInit}
+                        className="p-3 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:text-primary-600 hover:bg-primary-50 transition-all border border-transparent hover:border-primary-200"
+                        title="Editar Cliente"
+                      >
+                        <Edit2 size={18} />
+                      </button>
+                      <button 
+                        onClick={handleDeleteClient}
+                        className="p-3 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:text-red-600 hover:bg-red-50 transition-all border border-transparent hover:border-red-200"
+                        title="Excluir Cliente"
+                      >
+                        <Trash2 size={18} />
+                      </button>
+                    </div>
                   </div>
-                </div>
-                <div className="flex flex-wrap justify-end gap-2 w-full md:w-auto mt-4 md:mt-0">
-                  <button 
-                    onClick={handleChargeClient}
-                    disabled={actionLoading}
-                    className="flex-1 md:flex-none flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-green-600 text-white hover:bg-green-700 shadow-md transition-all font-bold disabled:opacity-50 hover:scale-[1.02] active:scale-[0.98]"
-                  >
-                    {actionLoading ? <Loader2 size={18} className="animate-spin" /> : <Clock size={18} />}
-                    Cobrar Títulos
-                  </button>
-                  <button 
-                    onClick={handleNegotiateIA} 
-                    disabled={isNegotiating || actionLoading}
-                    className="flex-1 md:flex-none flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-primary-600 text-white hover:bg-primary-700 shadow-md transition-all font-bold disabled:opacity-50 hover:scale-[1.02] active:scale-[0.98]"
-                  >
-                    {isNegotiating ? <Loader2 size={18} className="animate-spin" /> : <Sparkles size={18} />}
-                    Negociar c/ IA
-                  </button>
-                  <button 
-                    onClick={handleEditInit}
-                    className="p-3 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:text-primary-600 hover:bg-primary-50 transition-all border border-transparent hover:border-primary-200"
-                    title="Editar Cliente"
-                  >
-                    <Edit2 size={18} />
-                  </button>
-                  <button 
-                    onClick={handleDeleteClient}
-                    className="p-3 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:text-red-600 hover:bg-red-50 transition-all border border-transparent hover:border-red-200"
-                    title="Excluir Cliente"
-                  >
-                    <Trash2 size={18} />
-                  </button>
-                </div>
+                )}
               </div>
               
               <div className="flex-1 overflow-y-auto p-4 lg:p-8 bg-slate-50/30 dark:bg-dark-bg/30">
@@ -733,6 +875,63 @@ export const CRM: React.FC = () => {
                               </select>
                             </div>
                           </div>
+
+                          {/* LINHA EXTRA: Promessa + Contador de Cobranças */}
+                          <div className="flex flex-wrap items-center gap-4 mt-3 pt-3 border-t border-slate-100 dark:border-dark-border">
+                            {/* Promessa de Pagamento (Item 7) */}
+                            <div className="flex items-center gap-2">
+                              <p className="text-[10px] text-amber-500 uppercase font-black tracking-tight">📅 Promessa:</p>
+                              <input
+                                type="date"
+                                value={t.data_promessa || ''}
+                                onChange={(e) => updateTitleStatus(t.id, t.status, t.acao, e.target.value || undefined)}
+                                className="text-xs font-bold border border-amber-200 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-800 rounded-lg px-2 py-1 focus:ring-2 focus:ring-amber-400 text-amber-700 dark:text-amber-400"
+                                title="Data prometida pelo cliente para pagamento"
+                              />
+                              {t.data_promessa && (
+                                <button
+                                  onClick={() => updateTitleStatus(t.id, t.status, t.acao, '')}
+                                  className="text-[10px] text-slate-400 hover:text-red-500 transition-colors"
+                                  title="Remover promessa"
+                                >✕</button>
+                              )}
+                            </div>
+                            {/* Contador de Cobranças (Item 5) */}
+                            {(t.total_cobranças !== undefined) && (
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <span className="text-[10px] text-slate-400 uppercase font-black tracking-tight">💬 Cobranças Enviadas:</span>
+                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
+                                  (t.total_cobranças || 0) === 0 ? 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400' :
+                                  (t.total_cobranças || 0) < 5 ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400' :
+                                  (t.total_cobranças || 0) < 15 ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' :
+                                  'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
+                                }`}>
+                                  {t.total_cobranças || 0} envio{(t.total_cobranças || 0) !== 1 ? 's' : ''}
+                                </span>
+                                
+                                {/* Detalhamento por Canal */}
+                                {t.total_cobranças > 0 && (
+                                  <div className="flex items-center gap-1 ml-1">
+                                    {((t as any).cobrancas_whatsapp || 0) > 0 && (
+                                      <span className="px-1.5 py-0.5 rounded bg-green-50 dark:bg-green-950/30 text-green-600 dark:text-green-400 text-[9px] font-bold">
+                                        WhatsApp: {(t as any).cobrancas_whatsapp}
+                                      </span>
+                                    )}
+                                    {((t as any).cobrancas_email || 0) > 0 && (
+                                      <span className="px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-950/30 text-blue-600 dark:text-blue-400 text-[9px] font-bold">
+                                        E-mail: {(t as any).cobrancas_email}
+                                      </span>
+                                    )}
+                                    {((t as any).cobrancas_analu || 0) > 0 && (
+                                      <span className="px-1.5 py-0.5 rounded bg-purple-50 dark:bg-purple-950/30 text-purple-600 dark:text-purple-400 text-[9px] font-bold">
+                                        Analu: {(t as any).cobrancas_analu}
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
                         </div>
                         </div>
                         
@@ -745,6 +944,34 @@ export const CRM: React.FC = () => {
                             <Eye size={18} className="group-hover:scale-110 transition-transform" />
                             <span className="text-xs font-black uppercase">Documentos</span>
                           </button>
+                          
+                          {t.status !== 'Cartório' && (
+                            <button
+                              onClick={async () => {
+                                if (window.confirm(`Deseja enviar o título NF ${t.numero_nf} para o cartório?`)) {
+                                  setActionLoading(true);
+                                  try {
+                                    const res = await api.post('/cartorio/processar-massa', {
+                                      cnpj_empresa: companyCnpj,
+                                      titulo_ids: [t.id]
+                                    });
+                                    alert(res.data.message);
+                                    if (selectedClient) fetchTitles(selectedClient.nome);
+                                  } catch (e: any) {
+                                    alert(e.response?.data?.detail || 'Erro ao processar envio para o cartório');
+                                  } finally {
+                                    setActionLoading(false);
+                                  }
+                                }
+                              }}
+                              disabled={actionLoading}
+                              className="flex-1 md:flex-none p-3 rounded-xl bg-red-500 text-white hover:bg-red-600 transition-all shadow-sm hover:shadow-red-500/20"
+                              title="Enviar este Título para o Cartório"
+                            >
+                              {actionLoading ? <Loader2 size={20} className="animate-spin" /> : <Building2 size={20} />}
+                            </button>
+                          )}
+
                           <button 
                             onClick={() => handleChargeTitle(t.id)}
                             disabled={actionLoading}
@@ -1250,10 +1477,45 @@ export const CRM: React.FC = () => {
               )}
             </div>
 
-            {/* Footer */}
-            <div className="p-4 border-t border-slate-100 dark:border-dark-border bg-slate-50 dark:bg-dark-bg/30">
-              <p className="text-[10px] text-slate-400 text-center">
-                Documentos capturados automaticamente pela Analu a partir dos e-mails enviados.
+            {/* Footer — Upload Manual (Item 9) */}
+            <div className="p-4 border-t border-slate-100 dark:border-dark-border bg-indigo-50 dark:bg-indigo-950/20 space-y-3">
+              <p className="text-[10px] text-indigo-400 uppercase font-black tracking-widest flex items-center gap-1.5">
+                <Upload size={12} /> Adicionar Documento Manualmente
+              </p>
+              <div className="flex gap-2">
+                <select
+                  value={uploadTipo}
+                  onChange={e => setUploadTipo(e.target.value)}
+                  className="flex-1 text-xs font-bold border border-indigo-200 dark:border-indigo-800 bg-white dark:bg-dark-surface rounded-xl px-3 py-2 focus:ring-2 focus:ring-indigo-400 text-indigo-700 dark:text-indigo-300"
+                >
+                  <option value="NFe">NFe (Nota Fiscal Produto)</option>
+                  <option value="NFS">NFS (Nota Fiscal Serviço)</option>
+                  <option value="Fatura">Fatura de Locação</option>
+                  <option value="Boleto">Boleto Bancário</option>
+                  <option value="XML">XML da Nota</option>
+                </select>
+                <button
+                  onClick={() => uploadInputRef.current?.click()}
+                  disabled={uploadLoading}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black transition-all flex items-center gap-1.5 shadow-sm disabled:opacity-60"
+                >
+                  {uploadLoading ? <Loader2 size={14} className="animate-spin" /> : <PlusCircle size={14} />}
+                  {uploadLoading ? 'Enviando...' : 'Selecionar'}
+                </button>
+              </div>
+              <input
+                ref={uploadInputRef}
+                type="file"
+                accept=".pdf,.xml"
+                className="hidden"
+                onChange={e => {
+                  const f = e.target.files?.[0];
+                  if (f) handleManualUpload(f);
+                  e.target.value = '';
+                }}
+              />
+              <p className="text-[10px] text-indigo-300 dark:text-indigo-500">
+                Aceita PDF e XML. O arquivo será indexado automaticamente para esta NF.
               </p>
             </div>
           </div>

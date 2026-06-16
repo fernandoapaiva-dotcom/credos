@@ -126,20 +126,45 @@ class Manager:
         conn.commit()
         conn.close()
 
-    def agrupar_debitos_por_cliente(self):
+    def agrupar_debitos_por_cliente(self, incluir_pre_vencimento=True):
+        """
+        Agrupa débitos por cliente.
+        
+        Item 4: Se incluir_pre_vencimento=True, também inclui títulos
+        que vencem em exatamente 1, 3 ou 10 dias (lembretes amigáveis pré-vencimento).
+        """
         todos = listar_clientes_db(self.cnpj_empresa)
         res = {}
+        DIAS_PRE_VENCIMENTO = [1, 3, 10]  # D-1, D-3, D-10
+        
         for cli in todos:
             titulos = listar_titulos_por_cliente(self.cnpj_empresa, cli['nome'])
             pendentes = []
             for t in titulos:
                 if t['acao'] == 'Cobrar' and t['status'] in ('Aberto', 'Manter Aberto', 'Cartrio'):
                     calc = self.calcular_valores_cdc(t['valor'], t['vencimento'])
-                    # SÓ COBRA SE ESTIVER ATRASADO (Dias Atraso >= 1)
-                    if calc.get('dias_atraso', 0) >= 1:
+                    dias_atraso = calc.get('dias_atraso', 0)
+                    
+                    # Inclui se estiver atrasado
+                    if dias_atraso >= 1:
                         t_copy = dict(t)
                         t_copy.update(calc)
+                        t_copy['pre_vencimento'] = False
                         pendentes.append(t_copy)
+                    
+                    # Item 4: Inclui se estiver nos dias de aviso pré-vencimento
+                    elif incluir_pre_vencimento and dias_atraso == 0:
+                        try:
+                            from datetime import datetime as _dt
+                            venc = _dt.strptime(t['vencimento'], "%d/%m/%Y")
+                            dias_para_vencer = (venc - _dt.now()).days
+                            if dias_para_vencer in DIAS_PRE_VENCIMENTO:
+                                t_copy = dict(t)
+                                t_copy.update(calc)
+                                t_copy['pre_vencimento'] = True
+                                t_copy['dias_para_vencer'] = dias_para_vencer
+                                pendentes.append(t_copy)
+                        except: pass
             
             if pendentes:
                 total_cli = sum(t['total'] for t in pendentes)
@@ -304,6 +329,16 @@ class Manager:
             msg += f"Gentileza confirmar o recebimento para nossa organização interna. Obrigada! 😊"
         else:
             msg += f"Gentileza entrar em contato ou enviar o comprovante para regularização. Se já pagou, por favor desconsidere esta mensagem."
+        
+        # Item 8: Inclui chave PIX apenas se pix_habilitado != 0
+        pix_habilitado = self.config.get('pix_habilitado', 1)
+        chave_pix = self.config.get('chave_pix', '')
+        tipo_chave_pix = self.config.get('tipo_chave_pix', '')
+        if pix_habilitado and chave_pix and not has_cartorio:
+            msg += f"\n\n💳 *Pagamento via PIX:*\nChave ({tipo_chave_pix or 'PIX'}): `{chave_pix}`"
+        elif not pix_habilitado and chave_pix:
+            msg += f"\n\n⚠️ *Pagamento via PIX desabilitado no momento.* Solicite o boleto bancário ao financeiro."
+        
         
         if has_cartorio:
             msg += f"\n\n *INSTRUÇÕES DE REGULARIZAÇÃO:*\n"
@@ -605,7 +640,7 @@ class Manager:
                     SELECT data_envio as data_hora, cliente as pagador, tipo_envio as canal, 
                            status as resultado, detalhes as obs, usuario
                     FROM logs_envio
-                    WHERE tipo_envio IN ('Email', 'WhatsApp', 'IA') {where_str}
+                    WHERE tipo_envio IN ('WhatsApp/Email', 'WhatsApp', 'Email', 'IA', 'WhatsApp/Email Automático', 'Cobrança Manual', 'Cobrana Manual', 'Cobrança Automática', 'Cobranca Automatica', 'Lembrete') {where_str}
                 """
                 df = pd.read_sql_query(query, conn, params=params)
 
@@ -634,19 +669,45 @@ class Manager:
                 query = f"""
                     SELECT data_envio as data_hora, cliente as pagador, detalhes as obs, usuario
                     FROM logs_envio
-                    WHERE tipo_envio = 'Excluso CRM' {where_str}
+                    WHERE (tipo_envio = 'Exclusão CRM' OR tipo_envio = 'Excluso CRM') {where_str}
                 """
                 df = pd.read_sql_query(query, conn, params=params)
 
             elif tipo_rel == "Solicitado_Cartorio":
-                where_str, params = build_filters("cj.data_execucao", "t.pagador")
-                query = f"""
+                where_cj, params_cj = build_filters("cj.data_execucao", "t.pagador")
+                query_cj = f"""
                     SELECT cj.data_execucao as data_hora, t.pagador, t.numero_nf, t.valor, cj.status_automacao as status
                     FROM cartorio_jobs cj
                     JOIN titulos t ON cj.titulo_id = t.id
-                    WHERE cj.intervacao_manual = 1 {where_str}
+                    WHERE cj.intervacao_manual = 1 {where_cj}
                 """
-                df = pd.read_sql_query(query, conn, params=params)
+                where_aud, params_aud = build_filters("a.data_hora", "t.pagador")
+                query_aud = f"""
+                    SELECT a.data_hora, t.pagador, t.numero_nf, t.valor, 'Cartório' as status
+                    FROM auditoria_titulos a
+                    JOIN titulos t ON a.titulo_id = t.id
+                    WHERE a.status_novo = 'Cartório' {where_aud}
+                """
+                try:
+                    df_cj = pd.read_sql_query(query_cj, conn, params=params_cj)
+                except:
+                    df_cj = pd.DataFrame()
+                try:
+                    df_aud = pd.read_sql_query(query_aud, conn, params=params_aud)
+                except:
+                    df_aud = pd.DataFrame()
+                
+                if not df_cj.empty and not df_aud.empty:
+                    df = pd.concat([df_cj, df_aud], ignore_index=True)
+                elif not df_cj.empty:
+                    df = df_cj
+                elif not df_aud.empty:
+                    df = df_aud
+                else:
+                    df = pd.DataFrame()
+                
+                if not df.empty:
+                    df = df.sort_values('data_hora', ascending=False)
 
             elif tipo_rel == "Enviado_Cartorio":
                 where_str, params = build_filters("cj.data_execucao", "t.pagador")
@@ -658,6 +719,46 @@ class Manager:
                 """
                 df = pd.read_sql_query(query, conn, params=params)
                 
+            elif tipo_rel == "Cobrancas_Diarias":
+                # Rel. Cobranças Diárias — Unifica logs_envio (operador + sistema) + negociacoes (Analu IA)
+                where_logs, params_logs = build_filters("data_envio", "cliente")
+                where_neg, params_neg = build_filters("criado_em", "cliente")
+                
+                query_logs = f"""
+                    SELECT data_envio as data_hora, cliente as pagador, 
+                           tipo_envio as canal, status as resultado, 
+                           usuario as operador, detalhes as obs
+                    FROM logs_envio
+                    WHERE tipo_envio IN ('WhatsApp/Email', 'WhatsApp', 'Email', 'IA', 'WhatsApp/Email Automático', 'Cobrança Manual', 'Cobrana Manual', 'Cobrança Automática', 'Cobranca Automatica', 'Lembrete')
+                      AND status = 'Sucesso'
+                    {where_logs}
+                """
+                query_neg = f"""
+                    SELECT criado_em as data_hora, cliente as pagador,
+                           'Analu IA (WhatsApp)' as canal, 
+                           COALESCE(status_resposta, 'Enviado') as resultado,
+                           'Analu' as operador,
+                           mensagem_gerada as obs
+                    FROM negociacoes
+                    WHERE 1=1 {where_neg}
+                """
+                try:
+                    df_logs = pd.read_sql_query(query_logs, conn, params=params_logs)
+                except: df_logs = pd.DataFrame()
+                try:
+                    df_neg = pd.read_sql_query(query_neg, conn, params=params_neg)
+                except: df_neg = pd.DataFrame()
+                
+                if not df_logs.empty and not df_neg.empty:
+                    df = pd.concat([df_logs, df_neg], ignore_index=True)
+                elif not df_logs.empty:
+                    df = df_logs
+                elif not df_neg.empty:
+                    df = df_neg
+                
+                if not df.empty:
+                    df = df.sort_values('data_hora', ascending=False)
+
             elif tipo_rel == "Todos":
                 # Fallback: Combina logs de envio se tipo for Todos
                 where_str, params = build_filters("data_envio", "cliente")
@@ -691,7 +792,8 @@ class Manager:
             "Cancelados": "RELATÓRIO DE TÍTULOS CANCELADOS",
             "Excluidos": "HISTÓRICO DE EXCLUSÕES NO CRM",
             "Solicitado_Cartorio": "TÍTULOS SOLICITADOS PARA CARTÓRIO (OPERADOR)",
-            "Enviado_Cartorio": "TÍTULOS ENVIADOS PARA CARTÓRIO (ANALU IA)"
+            "Enviado_Cartorio": "TÍTULOS ENVIADOS PARA CARTÓRIO (ANALU IA)",
+            "Cobrancas_Diarias": "COBRANÇAS DIÁRIAS - OPERADOR + ANALU (COMPLETO)",
         }
         pdf.set_font("Arial", 'B', 11)
         pdf.cell(0, 6, titulos_map.get(tipo_rel, "RELATÓRIO DE ATIVIDADES"), 0, 1, 'C')
@@ -706,8 +808,8 @@ class Manager:
             pdf.cell(0, 10, "Nenhum registro encontrado para este relatório.", 0, 1, 'C')
         else:
             # Seleo de Colunas
-            if tipo_rel == "Cobrados":
-                cols = [("Data/Hora", 35), ("Cliente", 65), ("Canal", 25), ("Status", 25), ("USUÁRIO", 30), ("OCORRÊNCIA", 100)]
+            if tipo_rel == "Cobrados" or tipo_rel == "Cobrancas_Diarias":
+                cols = [("Data/Hora", 35), ("Cliente", 65), ("Canal", 30), ("Status", 25), ("USUÁRIO/IA", 30), ("OCORRÊNCIA", 95)]
             elif tipo_rel in ("Baixados", "Cancelados", "Solicitado_Cartorio", "Enviado_Cartorio"):
                 cols = [("Data/Hora", 40), ("Cliente", 90), ("NF", 30), ("Valor", 40), ("Complemento", 80)]
             else: # Excluidos / Todos
@@ -729,14 +831,17 @@ class Manager:
                 pdf.set_fill_color(245, 245, 250) if fill else pdf.set_fill_color(255, 255, 255)
                 h_data = self._formatar_data_br(str(r.get('data_hora', '')), incluir_hora=True)
                 
-                if tipo_rel == "Cobrados":
+                if tipo_rel == "Cobrados" or tipo_rel == "Cobrancas_Diarias":
                     pdf.cell(cols[0][1], 6, h_data, 1, 0, 'C', fill=fill)
                     pdf.cell(cols[1][1], 6, str(r.get('pagador', ''))[:45], 1, 0, 'L', fill=fill)
-                    pdf.cell(cols[2][1], 6, str(r.get('canal', '')), 1, 0, 'C', fill=fill)
+                    pdf.cell(cols[2][1], 6, str(r.get('canal', ''))[:18], 1, 0, 'C', fill=fill)
                     pdf.cell(cols[3][1], 6, str(r.get('resultado', '')), 1, 0, 'C', fill=fill)
-                    pdf.cell(cols[4][1], 6, str(r.get('usuario', '') or 'Analu'), 1, 0, 'C', fill=fill)
-                    det = self._humanizar_detalhes(str(r.get('obs', ''))).replace('\n', ' ')
-                    pdf.cell(cols[5][1], 6, det[:75], 1, 0, 'L', fill=fill)
+                    operador_val = str(r.get('operador') or r.get('usuario') or 'Analu')
+                    pdf.cell(cols[4][1], 6, operador_val[:18], 1, 0, 'C', fill=fill)
+                    det_raw = str(r.get('obs', '') or '')
+                    det = self._humanizar_detalhes(det_raw).replace('\n', ' ')[:80]
+                    det = det.encode('latin-1', 'replace').decode('latin-1')
+                    pdf.cell(cols[5][1], 6, det, 1, 0, 'L', fill=fill)
                 
                 elif tipo_rel in ("Baixados", "Cancelados", "Solicitado_Cartorio", "Enviado_Cartorio"):
                     pdf.cell(cols[0][1], 6, h_data, 1, 0, 'C', fill=fill)
@@ -751,13 +856,14 @@ class Manager:
                     pdf.cell(cols[1][1], 6, str(r.get('pagador', ''))[:60], 1, 0, 'L', fill=fill)
                     pdf.cell(cols[2][1], 6, str(r.get('usuario', '') or 'Operador'), 1, 0, 'C', fill=fill)
                     det = self._humanizar_detalhes(str(r.get('obs', ''))).replace('\n', ' ')
+                    det = det.encode('latin-1', 'replace').decode('latin-1')
                     pdf.cell(cols[3][1], 6, det[:105], 1, 0, 'L', fill=fill)
 
                 pdf.ln()
                 fill = not fill
 
         # Retorno do PDF em bytes
-        return pdf.output(dest='S').encode('latin-1')
+        return pdf.output(dest='S').encode('latin-1', 'replace')
 
     # Alias for backward compatibility
     gerar_relatorio_pdf = gerar_relatorio_pdf_cobrancas
@@ -802,8 +908,8 @@ class Manager:
         pdf.line(10, 53, 200, 53)
         pdf.ln(2)
         
-        # Correção da Query: Busca flexível por tipos de envio para incluir 'WhatsApp/Email'
-        query = f"SELECT cliente, tipo_envio, status, detalhes, usuario FROM logs_envio WHERE data_envio LIKE '{data_alvo}%' AND (tipo_envio LIKE '%Email%' OR tipo_envio LIKE '%WhatsApp%' OR tipo_envio LIKE '%IA%')"
+        # Correção da Query: Busca flexível por tipos de envio para incluir 'WhatsApp/Email' e outras cobranças
+        query = f"SELECT cliente, tipo_envio, status, detalhes, usuario FROM logs_envio WHERE data_envio LIKE '{data_alvo}%' AND (tipo_envio LIKE '%Email%' OR tipo_envio LIKE '%WhatsApp%' OR tipo_envio LIKE '%IA%' OR tipo_envio LIKE '%Cobr%' OR tipo_envio LIKE '%Lembrete%')"
         
         try:
             df = pd.read_sql_query(query, conn)
@@ -842,11 +948,12 @@ class Manager:
                 pdf.set_font("Arial", '', 7)
                 fill = False
                 for _, r in df.iterrows():
-                    cliente = str(r.get('cliente', ''))[:35]
+                    cliente = str(r.get('cliente', ''))[:35].encode('latin-1', 'replace').decode('latin-1')
                     canal = str(r.get('tipo_envio', ''))
                     status = str(r.get('status', ''))
                     det_raw = str(r.get('detalhes', ''))
                     det = self._humanizar_detalhes(det_raw).replace('\n', ' ')
+                    det = det.encode('latin-1', 'replace').decode('latin-1')
                     
                     if status == "Falha": pdf.set_text_color(200, 0, 0)
                     else: pdf.set_text_color(0, 0, 0)
@@ -877,3 +984,212 @@ class Manager:
         os.makedirs("temp_data", exist_ok=True)
         pdf.output(pdf_path)
         return pdf_path
+
+    def _buscar_status_titulo_db(self, conn, pagador, numero, vencimento, valor):
+        # Normalize inputs
+        pagador_clean = pagador.strip().upper()
+        num_clean = str(numero).strip().lstrip('0')
+        
+        c = conn.cursor()
+        # 1. Exact match by number, vencimento and valor
+        try:
+            c.execute("""
+                SELECT status FROM titulos 
+                WHERE (ltrim(numero_nf, '0') = ? OR numero_nf = ?) 
+                  AND (vencimento = ? OR vencimento = ?) 
+                  AND ABS(valor - ?) < 0.05
+            """, (num_clean, str(numero).strip(), vencimento, vencimento, valor))
+            row = c.fetchone()
+            if row: return row[0]
+        except: pass
+            
+        # 2. Match by number and pagador
+        try:
+            c.execute("""
+                SELECT status FROM titulos 
+                WHERE (ltrim(numero_nf, '0') = ? OR numero_nf = ?) 
+                  AND pagador LIKE ?
+            """, (num_clean, str(numero).strip(), f"%{pagador_clean}%"))
+            row = c.fetchone()
+            if row: return row[0]
+        except: pass
+            
+        # 3. Match by pagador, vencimento and valor
+        try:
+            c.execute("""
+                SELECT status FROM titulos 
+                WHERE pagador LIKE ? 
+                  AND vencimento = ? 
+                  AND ABS(valor - ?) < 0.05
+            """, (f"%{pagador_clean}%", vencimento, valor))
+            row = c.fetchone()
+            if row: return row[0]
+        except: pass
+            
+        return "Não Encontrado"
+
+    def confrontar_pdf_banco(self, filepath, mapa=None):
+        from src.extractor import ler_pdf_bruto
+        df = ler_pdf_bruto(filepath)
+        if df is None or df.empty:
+            return {"columns": [], "rows": []}
+            
+        headers = df.columns.tolist()
+        
+        # Auto detect mapping if not provided or empty
+        if not mapa:
+            mapa = {}
+            for col in headers:
+                col_lower = str(col).lower()
+                if 'venc' in col_lower:
+                    mapa['vencimento'] = col
+                elif 'seu' in col_lower or ('num' in col_lower and 'nos' not in col_lower):
+                    mapa['numero'] = col
+                elif 'nosso' in col_lower:
+                    mapa['nosso_numero'] = col
+                elif 'val' in col_lower:
+                    mapa['valor'] = col
+                elif 'pag' in col_lower:
+                    mapa['pagador'] = col
+                elif 'sit' in col_lower:
+                    mapa['situacao'] = col
+
+        # Ensure we have at least the minimum mapped columns
+        col_venc = mapa.get('vencimento')
+        col_num = mapa.get('numero')
+        col_val = mapa.get('valor')
+        col_pag = mapa.get('pagador')
+        
+        # If we can't find minimum, fallback to first few columns
+        if not col_venc and len(headers) > 0: col_venc = headers[0]
+        if not col_num and len(headers) > 3: col_num = headers[3]
+        if not col_val and len(headers) > 4: col_val = headers[4]
+        if not col_pag and len(headers) > 5: col_pag = headers[5]
+        
+        conn = conectar(self.cnpj_empresa)
+        rows_result = []
+        
+        for _, row in df.iterrows():
+            # Get values
+            raw_venc = str(row.get(col_venc, '')).strip() if col_venc else ''
+            raw_num = str(row.get(col_num, '')).strip() if col_num else ''
+            raw_val = str(row.get(col_val, '')).strip() if col_val else ''
+            raw_pag = str(row.get(col_pag, '')).strip() if col_pag else ''
+            
+            # Skip header lookalikes
+            if not raw_venc or "Vencimento" in raw_venc or "Valor" in raw_val:
+                continue
+                
+            # Parse value
+            valor_float = 0.0
+            try:
+                val_clean = raw_val.replace('R$', '').replace(' ', '').replace('.', '').replace(',', '.')
+                valor_float = float(val_clean)
+            except:
+                pass
+                
+            # Normalize date
+            venc_norm = raw_venc
+            if '/' in raw_venc:
+                partes = raw_venc.split('/')
+                if len(partes) == 3:
+                    venc_norm = f"{partes[0].zfill(2)}/{partes[1].zfill(2)}/{partes[2]}"
+            
+            # Match in database
+            status_credos = self._buscar_status_titulo_db(conn, raw_pag, raw_num, venc_norm, valor_float)
+            
+            # Convert row to dictionary
+            row_dict = {str(k): str(v) for k, v in row.to_dict().items()}
+            row_dict['Status Credos'] = status_credos
+            rows_result.append(row_dict)
+            
+        conn.close()
+        
+        # Return columns and rows
+        res_cols = headers + ['Status Credos']
+        return {"columns": res_cols, "rows": rows_result}
+
+    def gerar_pdf_confronto(self, data):
+        # data has {"columns": [...], "rows": [...]}
+        pdf = FPDF(orientation='L', unit='mm', format='A4')
+        pdf.add_page()
+        
+        # Logo Credos
+        credos_logo = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'logo.png')
+        if os.path.exists(credos_logo):
+            try: pdf.image(credos_logo, 10, 10, h=10)
+            except: pass
+            
+        # Cabeçalho
+        pdf.set_font("Arial", 'B', 14)
+        pdf.set_y(15)
+        pdf.cell(0, 6, "CONFRONTO DE BOLETOS BANCO VS CREDOS", 0, 1, 'C')
+        
+        pdf.set_font("Arial", '', 8)
+        pdf.cell(0, 5, f"Emissão: {datetime.now().strftime('%d/%m/%Y %H:%M')}", 0, 1, 'R')
+        pdf.ln(5)
+        
+        columns = data.get('columns', [])
+        rows = data.get('rows', [])
+        
+        if not rows:
+            pdf.ln(20)
+            pdf.set_font("Arial", 'B', 12)
+            pdf.cell(0, 10, "Nenhum registro encontrado.", 0, 1, 'C')
+            return pdf.output(dest='S').encode('latin-1')
+            
+        # Filter and display the most important columns
+        important_cols = []
+        for col in columns:
+            col_lower = col.lower()
+            if 'venc' in col_lower: important_cols.append((col, 25))
+            elif 'seu' in col_lower: important_cols.append((col, 25))
+            elif 'nosso' in col_lower: important_cols.append((col, 25))
+            elif 'val' in col_lower: important_cols.append((col, 30))
+            elif 'pag' in col_lower: important_cols.append((col, 95))
+            elif 'sit' in col_lower: important_cols.append((col, 35))
+            elif 'status' in col_lower: important_cols.append((col, 40))
+            
+        # Fallback if no mapped columns
+        if not important_cols:
+            col_w = int(275 / len(columns[:7]))
+            for col in columns[:7]:
+                important_cols.append((col, col_w))
+                
+        # Draw table header
+        pdf.set_fill_color(30, 80, 160)
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_font("Arial", 'B', 8)
+        for name, width in important_cols:
+            pdf.cell(width, 7, name, 1, 0, 'C', fill=True)
+        pdf.ln()
+        
+        # Draw table rows
+        pdf.set_text_color(0, 0, 0)
+        pdf.set_font("Arial", '', 7)
+        fill = False
+        for r in rows:
+            pdf.set_fill_color(245, 245, 250) if fill else pdf.set_fill_color(255, 255, 255)
+            for name, width in important_cols:
+                val = str(r.get(name, ''))
+                if 'status' in name.lower():
+                    if val.lower() in ('pago', 'baixado'):
+                        pdf.set_text_color(0, 120, 0)
+                        pdf.set_font("Arial", 'B', 7)
+                    elif val.lower() in ('cartorio', 'protesto', 'protestado'):
+                        pdf.set_text_color(200, 0, 0)
+                        pdf.set_font("Arial", 'B', 7)
+                    elif val.lower() == 'não encontrado':
+                        pdf.set_text_color(100, 100, 100)
+                        pdf.set_font("Arial", 'I', 7)
+                    else:
+                        pdf.set_text_color(0, 0, 0)
+                        pdf.set_font("Arial", '', 7)
+                else:
+                    pdf.set_text_color(0, 0, 0)
+                    pdf.set_font("Arial", '', 7)
+                pdf.cell(width, 6, val[:50], 1, 0, 'C' if 'venc' in name.lower() or 'num' in name.lower() or 'status' in name.lower() else 'L', fill=fill)
+            pdf.ln()
+            fill = not fill
+            
+        return pdf.output(dest='S').encode('latin-1')
