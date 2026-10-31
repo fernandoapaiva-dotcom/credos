@@ -89,8 +89,10 @@ def whatsapp_status(p1: str, p2: str = None):
     
     evo = EvolutionController(config=conf, nome_empresa_cliente=nome_instancia)
     status = evo.checar_status()
-    if status == "connecting":
-        status = "disconnected"
+    if status in ["close", "closed", "disconnected"]:
+        status = "closed"
+    elif status in ["open", "connected"]:
+        status = "open"
     return {"status": status}
 
 @router.post("/{p1}/whatsapp/create")
@@ -104,7 +106,9 @@ def whatsapp_create(p1: str, p2: str = None):
     res = evo.criar_instancia()
     if "error" in res and "already exists" not in str(res).lower() and "already in use" not in str(res).lower():
         raise HTTPException(status_code=400, detail=str(res.get("error")))
-    return {"success": True}
+    
+    qr = evo.buscar_qrcode()
+    return {"success": True, "qr_code_base64": qr}
 
 @router.get("/{p1}/whatsapp/qr")
 @router.get("/{p1}/{p2}/whatsapp/qr")

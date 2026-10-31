@@ -1,8 +1,10 @@
-from fastapi import APIRouter, HTTPException, Header, BackgroundTasks, Response
+from fastapi import APIRouter, HTTPException, Header, BackgroundTasks, Response, UploadFile, File, Form
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Dict, Any, List
 from src.manager import Manager
 import os
+import tempfile
+import json
 
 router = APIRouter()
 
@@ -57,3 +59,61 @@ def generate_report(req: ReportRequest, x_company_cnpj: str = Header(...)):
         media_type="application/pdf", 
         headers=headers
     )
+
+@router.post("/confront-pdf")
+async def confront_pdf(
+    x_company_cnpj: str = Header(...),
+    layout: Optional[str] = Form(None), # Optional JSON string of layout map
+    file: UploadFile = File(...)
+):
+    try:
+        # Save uploaded file to temp file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            tmp.write(await file.read())
+            tmp_path = tmp.name
+
+        mapa_layout = None
+        if layout:
+            try:
+                mapa_layout = json.loads(layout)
+            except:
+                pass
+
+        mgr = Manager(x_company_cnpj)
+        result = mgr.confrontar_pdf_banco(tmp_path, mapa_layout)
+        
+        # Cleanup temp file
+        if os.path.exists(tmp_path):
+            try: os.remove(tmp_path)
+            except: pass
+            
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+class ExportConfrontRequest(BaseModel):
+    columns: List[str]
+    rows: List[Dict[str, Any]]
+
+@router.post("/export-confront-pdf")
+def export_confront_pdf(req: ExportConfrontRequest, x_company_cnpj: str = Header(...)):
+    try:
+        mgr = Manager(x_company_cnpj)
+        content = mgr.gerar_pdf_confronto(req.dict())
+        
+        filename = "relatorio_confronto_boletos.pdf"
+        content_length = len(content)
+        
+        headers = {
+            'Content-Disposition': f'attachment; filename="{filename}"',
+            'Content-Length': str(content_length),
+            'Access-Control-Expose-Headers': 'Content-Disposition'
+        }
+        
+        return Response(
+            content=content,
+            media_type="application/pdf",
+            headers=headers
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

@@ -89,12 +89,17 @@ def _verificar_migracoes_config(conn):
         c.execute("ALTER TABLE config ADD COLUMN diretores_whatsapp TEXT")
     if 'grupo_relatorio_jid' not in cols:
         c.execute("ALTER TABLE config ADD COLUMN grupo_relatorio_jid TEXT")
+    if 'pix_habilitado' not in cols:
+        c.execute("ALTER TABLE config ADD COLUMN pix_habilitado INTEGER DEFAULT 1")
     
-    # Migração Clientes para incluir Endereço
+    # Migração Clientes para incluir Endereço e sinalizador Scanner
     c.execute("PRAGMA table_info(clientes)")
     cli_cols = [col[1] for col in c.fetchall()]
     if 'endereco' not in cli_cols:
         c.execute("ALTER TABLE clientes ADD COLUMN endereco TEXT")
+    if 'scanner_pendente' not in cli_cols:
+        # 1 = cliente criado pelo scanner, aguarda preenchimento de WhatsApp/email
+        c.execute("ALTER TABLE clientes ADD COLUMN scanner_pendente INTEGER DEFAULT 0")
     
     if 'logo_b64' in cols:
         # Garante que se estiver vazio, a gente coloca a logo nova (Credos)
@@ -339,13 +344,15 @@ def inicializar_banco():
     conn.commit()
     conn.close()
 
-def verificar_e_registrar_webhook(msg_id):
-    """Verifica e registra um ID de mensagem de forma atômica no banco central."""
+def verificar_e_registrar_webhook(msg_id, sufixo=""):
+    """Verifica e registra um ID de mensagem de forma atômica no banco central.
+    O sufixo permite deduplicação por contexto (ex: por empresa ou por grupo)."""
     if not msg_id: return False
+    key = f"{msg_id}_{sufixo}" if sufixo else msg_id
     conn = conectar() 
     c = conn.cursor()
     try:
-        c.execute("INSERT INTO webhook_ids (msg_id) VALUES (?)", (msg_id,))
+        c.execute("INSERT INTO webhook_ids (msg_id) VALUES (?)", (key,))
         conn.commit()
         return True
     except sqlite3.IntegrityError:

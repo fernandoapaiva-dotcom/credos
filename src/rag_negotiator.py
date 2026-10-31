@@ -11,7 +11,7 @@ class RAGNegotiator:
         self.cnpj_empresa = cnpj_empresa
         self.config = carregar_configuracoes_db(cnpj_empresa)
         self.api_key = self.config.get('gemini_api_key') or os.getenv("GEMINI_API_KEY")
-        self.model_id = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
+        self.model_id = os.getenv("GEMINI_MODEL", "gemini-1.5-pro-latest")
         
         if self.api_key:
             self.client = genai.Client(api_key=self.api_key)
@@ -316,6 +316,58 @@ class RAGNegotiator:
             
         # Fallback: Se não for saudação simples nem outras, deixa a IA tratar como financeiro e analisar.
         return 'financeiro'
+
+    def validar_comprovante_ia(self, cliente_nome, titulos_abertos, b64_data, mimetype):
+        """
+        Analisa um comprovante em imagem ou PDF usando o modelo multimodal do Gemini.
+        Cruza as informações encontradas com os títulos em aberto do cliente.
+        """
+        if not self.client or not b64_data:
+            return "⚠️ Validação por IA indisponível."
+            
+        try:
+            import base64
+            from google.genai import types
+            
+            # Limpa o prefixo do base64 se existir (ex: data:image/jpeg;base64,...)
+            if "," in b64_data:
+                b64_data = b64_data.split(",")[1]
+                
+            b64_decoded = base64.b64decode(b64_data)
+            
+            # Se for octet-stream, tenta deduzir
+            if mimetype == "application/octet-stream" or not mimetype:
+                if b64_decoded.startswith(b'%PDF'):
+                    mimetype = "application/pdf"
+                else:
+                    mimetype = "image/jpeg"
+                    
+            part = types.Part.from_bytes(data=b64_decoded, mime_type=mimetype)
+            
+            total_aberto = sum(float(t['valor']) for t in titulos_abertos)
+            
+            prompt = (
+                f"Você é um auditor financeiro rigoroso. Analise este comprovante de pagamento.\n"
+                f"Responda com um breve laudo (1-2 frases) informando o valor pago detectado, data, recebedor e pagador.\n"
+                f"Compare com o sistema: o cliente é '{cliente_nome}' e o total em aberto é R$ {total_aberto:.2f}.\n"
+                f"Títulos em aberto: {json.dumps(titulos_abertos)}\n"
+                f"O comprovante parece ser válido para quitar algum desses débitos? "
+                f"Termine a sua resposta COM UMA QUEBRA DE LINHA e a palavra [OK] se for válido, ou [ALERTA] se o recebedor for suspeito ou o valor não bater em nada."
+            )
+            
+            response = self.client.models.generate_content(
+                model=self.model_id,
+                contents=[part, prompt]
+            )
+            
+            if response and response.text:
+                laudo = response.text.replace("**", "*").strip()
+                return laudo
+            return "⚠️ IA não conseguiu ler o comprovante."
+            
+        except Exception as e:
+            print(f"Erro na validação IA de comprovante: {e}")
+            return f"⚠️ Erro ao processar arquivo com IA."
 
     def classificar_intencao(self, mensagem_cliente):
         prompt = (

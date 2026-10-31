@@ -36,8 +36,13 @@ class EvolutionController:
             
         self.apikey = key_raw.strip()
         
-        # Dinamismo para Multi-tenant
-        inst_raw = nome_empresa_cliente or os.getenv('INSTANCE_NAME') or "Credos_SaaS"
+        # Instância unificada compartilhada para todas as empresas
+        inst_raw = (
+            config.get('evo_instance')
+            or config.get('instance_name')
+            or os.getenv('INSTANCE_NAME')
+            or "11504286000169"
+        )
         self.instance = str(inst_raw).strip().replace(".", "").replace("-", "").replace("/", "").replace(" ", "").lower()
         self.jid_cache = {}
         
@@ -67,21 +72,78 @@ class EvolutionController:
 
     def checar_status(self):
         try:
-            endpoint = f"{self.url}/instance/connectionState/{self.instance}"
+            url_exec = self.url.replace('localhost', 'evolution_api') if 'localhost' in self.url and os.path.exists('/.dockerenv') else self.url
+            endpoint = f"{url_exec}/instance/connectionState/{self.instance}"
             r = requests.get(endpoint, headers=self.headers, timeout=10)
             if r.status_code == 200:
                 dados = r.json()
-                state = dados.get("instance", {}).get("state") or dados.get("state") or "disconnected"
+                state = dados.get("instance", {}).get("state") or dados.get("state") or "closed"
+                if state in ["close", "closed", "DISCONNECTED", "disconnected"]:
+                    return "closed"
+                elif state in ["open", "CONNECTED", "connected"]:
+                    return "open"
+                elif state in ["connecting", "CONNECTING"]:
+                    return "connecting"
                 return state
             elif r.status_code == 404:
-                return "disconnected"
+                return "closed"
             return "error"
         except Exception as e:
             return "error"
 
+    def buscar_qrcode(self):
+        try:
+            url_exec = self.url.replace('localhost', 'evolution_api') if 'localhost' in self.url and os.path.exists('/.dockerenv') else self.url
+            endpoint = f"{url_exec}/instance/connect/{self.instance}"
+            r = requests.get(endpoint, headers=self.headers, timeout=15)
+            if r.status_code in [200, 201]:
+                dados = r.json()
+                if isinstance(dados, dict) and dados.get("count") == 0:
+                    # Baileys QR expired or in cold state. Reset instance if disconnected.
+                    state = self.checar_status()
+                    if state != "open":
+                        self.deletar_instancia()
+                        time.sleep(1)
+                        self.criar_instancia()
+                        time.sleep(2)
+                        r2 = requests.get(endpoint, headers=self.headers, timeout=15)
+                        if r2.status_code in [200, 201]:
+                            dados = r2.json()
+
+                qr = (
+                    dados.get("base64")
+                    or (dados.get("qrcode", {}).get("base64") if isinstance(dados.get("qrcode"), dict) else None)
+                    or dados.get("code")
+                )
+                if qr and isinstance(qr, str) and len(qr) > 50:
+                    if not qr.startswith("data:image"):
+                        qr = f"data:image/png;base64,{qr}"
+                    return qr
+                if isinstance(dados.get("qrcode"), str) and len(dados.get("qrcode")) > 50:
+                    qr = dados.get("qrcode")
+                    if not qr.startswith("data:image"):
+                        qr = f"data:image/png;base64,{qr}"
+                    return qr
+            elif r.status_code == 404:
+                self.criar_instancia()
+                time.sleep(2)
+                r = requests.get(endpoint, headers=self.headers, timeout=15)
+                if r.status_code in [200, 201]:
+                    dados = r.json()
+                    qr = dados.get("base64") or (dados.get("qrcode", {}).get("base64") if isinstance(dados.get("qrcode"), dict) else None)
+                    if qr and isinstance(qr, str) and len(qr) > 50:
+                        if not qr.startswith("data:image"):
+                            qr = f"data:image/png;base64,{qr}"
+                        return qr
+            return None
+        except Exception as e:
+            print(f"Erro ao buscar QR Code: {e}")
+            return None
+
     def criar_instancia(self):
         try:
-            endpoint = f"{self.url}/instance/create"
+            url_exec = self.url.replace('localhost', 'evolution_api') if 'localhost' in self.url and os.path.exists('/.dockerenv') else self.url
+            endpoint = f"{url_exec}/instance/create"
             payload = {
                 "instanceName": self.instance,
                 "token": self.instance + "-token",
@@ -93,6 +155,15 @@ class EvolutionController:
                 self.configurar_settings()
                 return r.json()
             elif r.status_code in [403, 409]:
+                # If already exists and not open, reset instance so a fresh QR can be generated
+                if self.checar_status() != "open":
+                    self.deletar_instancia()
+                    time.sleep(1)
+                    r_retry = requests.post(endpoint, json=payload, headers=self.headers, timeout=60)
+                    if r_retry.status_code in [200, 201]:
+                        self.configurar_webhook()
+                        self.configurar_settings()
+                        return r_retry.json()
                 self.configurar_webhook()
                 self.configurar_settings()
                 return {"message": "already exists"}
@@ -167,9 +238,14 @@ class EvolutionController:
             
         if "@lid" in str(numero):
             try:
+                # Primeiro, tenta no cache
+                if str(numero) in self.jid_cache: return self.jid_cache[str(numero)]
+                
                 url_exec = self.url.replace('localhost', 'evolution_api') if 'localhost' in self.url and os.path.exists('/.dockerenv') else self.url
                 endpoint = f"{url_exec}/chat/findContacts/{self.instance}"
-                # Tenta resolver o @lid para @s.whatsapp.net
+                
+                # Tenta resolver o @lid para @s.whatsapp.net via contact finder
+                # Algumas versões da Evolution pedem POST no findContacts
                 r = requests.post(endpoint, json={"where": {"remoteJid": numero}}, headers=self.headers, timeout=10)
                 if r.status_code == 200:
                     data = r.json()
@@ -177,14 +253,29 @@ class EvolutionController:
                     for c in contacts:
                         jid = c.get("remoteJid") or c.get("jid") or ""
                         if "@s.whatsapp.net" in jid:
+                            self.jid_cache[str(numero)] = jid
                             return jid
-            except: pass
+                
+                # Fallback: Se não resolveu, tenta o endpoint profile
+                endpoint_prof = f"{url_exec}/chat/fetchProfile/{self.instance}"
+                r_prof = requests.post(endpoint_prof, json={"number": numero}, headers=self.headers, timeout=10)
+                if r_prof.status_code == 200:
+                    jid = r_prof.json().get("jid")
+                    if jid and "@s.whatsapp.net" in jid:
+                        self.jid_cache[str(numero)] = jid
+                        return jid
+            except Exception as e:
+                print(f"Erro ao resolver LID {numero}: {e}")
             return numero # Retorna o LID original se não conseguir resolver
 
         # Número normal (sem @): normaliza e resolve
         num_clean = "".join(filter(str.isdigit, str(numero)))
         if not num_clean: return None
-        if len(num_clean) in [10, 11]: num_clean = "55" + num_clean
+        
+        # Se tem 10 ou 11 dígitos, assume que é Brasil e adiciona 55
+        if len(num_clean) in [10, 11] and not num_clean.startswith("55"):
+            num_clean = "55" + num_clean
+        
         jid_default = f"{num_clean}@s.whatsapp.net"
         
         if num_clean.startswith("55"):
@@ -224,6 +315,11 @@ class EvolutionController:
             }
             r = requests.post(endpoint, json=payload, headers=self.headers, timeout=15)
             if r.status_code in [200, 201]: return True
+            
+            # Se falhou, logamos o erro para depuração
+            print(f"❌ FALHA ENVIO TEXTO para {target} (Instância {self.instance}): {r.status_code} - {r.text}")
+            if "@lid" in str(target):
+                print(f"⚠️ Nota: Tentativa de envio para LID {target} falhou. A Evolution pode exigir JID real.")
             self.debug_log("FALHA ENVIO TEXTO", endpoint, r, payload)
             return False
         except Exception as e:

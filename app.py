@@ -513,71 +513,72 @@ if selected == "Operacional":
     with t4:
         st.subheader("👥 CRM & Carteira")
         
-        c1, c2 = st.columns([3, 1])
-        filtro_crm = c1.text_input("🔍 Filtrar Cliente (Nome ou CNPJ)", key="crm_filter")
-        
-        all_clis = listar_clientes_db(conf.get('empresa_cnpj'))
-        if filtro_crm:
-            all_clis = [c for c in all_clis if filtro_crm.lower() in c['nome'].lower() or filtro_crm in c['cnpj']]
+        with st.expander("📋 Carteira de Clientes", expanded=True):
+            c1, c2 = st.columns([3, 1])
+            filtro_crm = c1.text_input("🔍 Filtrar Cliente (Nome ou CNPJ)", key="crm_filter")
             
-        if all_clis:
-            df_clis = pd.DataFrame(all_clis)
-            
-            # Gmail-style selection
-            c_sel_all = st.checkbox(" selecionar todos", key="crm_sel_all_check")
-            df_clis.insert(0, 'Selecionar', c_sel_all)
-            
-            # Editor de dados para alterações rápidas - Esconde o ID
-            edited_crm = st.data_editor(
-                df_clis, 
-                hide_index=True, 
-                width="stretch", 
-                key="crm_editor",
-                column_order=['Selecionar', 'nome', 'cnpj', 'whatsapp', 'email', 'contato'],
-                column_config={
-                    "id": None, 
-                    "Selecionar": st.column_config.CheckboxColumn("Sel", default=False)
-                }
-            )
-            
-            if 'confirmar_exclusao_crm' not in st.session_state:
-                st.session_state.confirmar_exclusao_crm = False
-
-            col1, col2 = st.columns([1, 4])
-            if col1.button("💾 Salvar Alterações"):
-                for _, r in edited_crm.iterrows():
-                    mgr.cadastrar_cliente_completo(r['nome'], r['cnpj'], r['whatsapp'], r['email'], r['contato'])
-                st.success("CRM Atualizado!"); st.rerun()
-            
-            # Lógica de Exclusão corrigida (sem botões aninhados)
-            if col2.button("🗑️ Excluir Selecionados", type="secondary"):
-                clis_to_del = edited_crm[edited_crm['Selecionar'] == True]
-                if not clis_to_del.empty:
-                    st.session_state.confirmar_exclusao_crm = True
-                else:
-                    st.info("Nenhum cliente selecionado.")
-
-            if st.session_state.confirmar_exclusao_crm:
-                clis_to_del = edited_crm[edited_crm['Selecionar'] == True]
-                st.warning(f"⚠️ Atenção: Você está prestes a excluir {len(clis_to_del)} clientes e todos os seus títulos.")
+            all_clis = listar_clientes_db(conf.get('empresa_cnpj'))
+            if filtro_crm:
+                all_clis = [c for c in all_clis if filtro_crm.lower() in c['nome'].lower() or filtro_crm in c['cnpj']]
                 
-                c_del1, c_del2 = st.columns(2)
-                if c_del1.button("✅ Sim, Confirmar Exclusão", type="primary", use_container_width=True):
-                    user_logado = st.session_state.get('usuario_atual')
-                    nome_usu = user_logado.get('nome_completo', 'Operador') if isinstance(user_logado, dict) else str(user_logado)
-                    
-                    for _, r in clis_to_del.iterrows():
-                        excluir_cliente_db(conf.get('empresa_cnpj'), r['id'], r['nome'], usuario=nome_usu)
-                    
+            if all_clis:
+                df_clis = pd.DataFrame(all_clis)
+                
+                # Gmail-style selection
+                c_sel_all = st.checkbox(" selecionar todos", key="crm_sel_all_check")
+                df_clis.insert(0, 'Selecionar', c_sel_all)
+                
+                # Editor de dados para alterações rápidas - Esconde o ID
+                edited_crm = st.data_editor(
+                    df_clis, 
+                    hide_index=True, 
+                    width="stretch", 
+                    key="crm_editor",
+                    column_order=['Selecionar', 'nome', 'cnpj', 'whatsapp', 'email', 'contato'],
+                    column_config={
+                        "id": None, 
+                        "Selecionar": st.column_config.CheckboxColumn("Sel", default=False)
+                    }
+                )
+                
+                if 'confirmar_exclusao_crm' not in st.session_state:
                     st.session_state.confirmar_exclusao_crm = False
-                    st.success("Clientes excluídos com sucesso!")
-                    time.sleep(1); st.rerun()
+     
+                col1, col2 = st.columns([1, 4])
+                if col1.button("💾 Salvar Alterações"):
+                    for _, r in edited_crm.iterrows():
+                        mgr.cadastrar_cliente_completo(r['nome'], r['cnpj'], r['whatsapp'], r['email'], r['contato'])
+                    st.success("CRM Atualizado!"); st.rerun()
+                
+                # Lógica de Exclusão corrigida (sem botões aninhados)
+                if col2.button("🗑️ Excluir Selecionados", type="secondary"):
+                    clis_to_del = edited_crm[edited_crm['Selecionar'] == True]
+                    if not clis_to_del.empty:
+                        st.session_state.confirmar_exclusao_crm = True
+                    else:
+                        st.info("Nenhum cliente selecionado.")
+     
+                if st.session_state.confirmar_exclusao_crm:
+                    clis_to_del = edited_crm[edited_crm['Selecionar'] == True]
+                    st.warning(f"⚠️ Atenção: Você está prestes a excluir {len(clis_to_del)} clientes e todos os seus títulos.")
                     
-                if c_del2.button("❌ Cancelar", use_container_width=True):
-                    st.session_state.confirmar_exclusao_crm = False
-                    st.rerun()
+                    c_del1, c_del2 = st.columns(2)
+                    if c_del1.button("✅ Sim, Confirmar Exclusão", type="primary", use_container_width=True):
+                        user_logado = st.session_state.get('usuario_atual')
+                        nome_usu = user_logado.get('nome_completo', 'Operador') if isinstance(user_logado, dict) else str(user_logado)
+                        
+                        for _, r in clis_to_del.iterrows():
+                            excluir_cliente_db(conf.get('empresa_cnpj'), r['id'], r['nome'], usuario=nome_usu)
+                        
+                        st.session_state.confirmar_exclusao_crm = False
+                        st.success("Clientes excluídos com sucesso!")
+                        time.sleep(1); st.rerun()
+                        
+                    if c_del2.button("❌ Cancelar", use_container_width=True):
+                        st.session_state.confirmar_exclusao_crm = False
+                        st.rerun()
 
-            st.divider()
+        st.divider()
             
             # --- BLOCO: TÍTULOS AGUARDANDO DADOS FISCAIS ---
             conn_aj = conectar(conf.get('empresa_cnpj'))

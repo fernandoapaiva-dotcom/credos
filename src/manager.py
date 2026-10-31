@@ -1030,7 +1030,7 @@ class Manager:
 
     def confrontar_pdf_banco(self, filepath, mapa=None):
         from src.extractor import ler_pdf_bruto
-        df = ler_pdf_bruto(filepath)
+        df = ler_pdf_bruto(filepath, cnpj=self.cnpj_empresa)
         if df is None or df.empty:
             return {"columns": [], "rows": []}
             

@@ -406,9 +406,11 @@ class MailScanner:
         # ── VERIFICAÇÃO FORTE: Campos rotulados NFe / NFS-e / Fatura ────────────
         # Extrai nome+CNPJ dos campos EXATOS do documento e cruza com o cadastro.
         # Esta camada tem prioridade: confirma ou bloqueia com alta precisão.
-        if texto_upper and (nome_alvo or cnpj_alvo_limpo):
+        if texto_upper:
             nome_tomador, cnpj_tomador = self._extrair_identidade_tomador(texto_upper)
             if nome_tomador or cnpj_tomador:
+                if nome_tomador: meta['nome_detectado'] = nome_tomador
+                
                 def _norm(t): return re.sub(r'[^A-Z0-9]', '', str(t).upper())
                 cnpj_match = bool(cnpj_tomador and cnpj_alvo_limpo and cnpj_tomador == cnpj_alvo_limpo)
                 nome_match = False
@@ -757,11 +759,21 @@ class MailScanner:
                     # 1. Se for PDF/XML (Documento Fiscal), EXIGE identidade confirmada.
                     # 2. Se for outro tipo (Boleto genérico), aceita Valor ou Vencimento como prova.
                     ext = os.path.splitext(m['fpath'])[1].lower()
+                    
+                    identidade_match = m.get('pertence_cliente', False)
+                    venc_match = m.get('tem_vencimento', False)
+                    valor_match = False
+                    if alvos_validos and m.get('valores'):
+                        for v_doc in m['valores']:
+                            if any(abs(v_doc - alvo) < 0.05 for alvo in alvos_validos):
+                                valor_match = True
+                                break
+
                     if ext in ['.pdf', '.xml']:
                         if identidade_match:
                             arquivos_aprovados.add(m['fpath'])
                             emails_com_nf_confirmada.add(m['email_id'])
-                            print(f"    ✅ BINGO IDENTIDADE: NF {nf_num} confirmada para {cliente_nome}")
+                            print(f"    ✅ BINGO IDENTIDADE: NF {nf_num} confirmada para {nome_cliente}")
                         else:
                             print(f"    [LGPD ⚠️] NF {nf_num} encontrada ({bname}), mas identidade não confirmada no documento. Ignorando.")
                     else:

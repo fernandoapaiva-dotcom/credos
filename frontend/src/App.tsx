@@ -6,6 +6,7 @@ import { Login } from './pages/Login';
 import { Companies } from './pages/Companies';
 import { Dashboard } from './pages/Dashboard';
 import { CRM } from './pages/CRM';
+import { CartorioQueue } from './pages/CartorioQueue';
 import { ImportPDF } from './pages/ImportPDF';
 import { Reports } from './pages/Reports';
 import { Settings } from './pages/Settings';
@@ -59,6 +60,12 @@ function App() {
             <Route path="/crm" element={
               <PrivateRoute requireCompany>
                 <CRM />
+              </PrivateRoute>
+            } />
+
+            <Route path="/cartorio" element={
+              <PrivateRoute requireCompany>
+                <CartorioQueue />
               </PrivateRoute>
             } />
 

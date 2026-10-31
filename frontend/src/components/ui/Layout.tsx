@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Users, FileText, UploadCloud, LogOut, Sun, Moon, ArrowLeftRight, Settings, Shield, Menu, X, MessageSquare } from 'lucide-react';
+import { LayoutDashboard, Users, FileText, UploadCloud, LogOut, Sun, Moon, ArrowLeftRight, Settings, Shield, Menu, X, MessageSquare, Landmark } from 'lucide-react';
 import clsx from 'clsx';
 
 interface LayoutProps {
@@ -25,6 +25,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, title }) => {
   const menu = [
     { label: 'Dashboard', icon: LayoutDashboard, path: '/dashboard' },
     { label: 'CRM & Títulos', icon: Users, path: '/crm' },
+    { label: 'Fila do Cartório', icon: Landmark, path: '/cartorio' },
     { label: 'Histórico WhatsApp', icon: MessageSquare, path: '/conversations' },
     { label: 'Importar PDF', icon: UploadCloud, path: '/import' },
     { label: 'Relatórios', icon: FileText, path: '/reports' },

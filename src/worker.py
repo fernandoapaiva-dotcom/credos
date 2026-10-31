@@ -259,6 +259,9 @@ def disparar_negociacoes_ia(cnpj_filtro=None, forcar_hoje=False):
             config['empresa_cnpj'] = cnpj
             evo = EvolutionController(config=config, nome_empresa_cliente=cnpj)
             operador_num = config.get('operador_whatsapp')
+            # JID do grupo de relatório da empresa (para alertas Admin — Item 6, 11)
+            grupo_jid_empresa = config.get('grupo_relatorio_jid')
+
 
             fila = mgr.agrupar_debitos_por_cliente()
             for cliente, info in fila.items():
@@ -351,23 +354,29 @@ def disparar_negociacoes_ia(cnpj_filtro=None, forcar_hoje=False):
                     for num in numeros:
                         evo.enviar_mensagem_texto(num, msg_cliente_cartorio)
 
-                    # 2. Notifica o operador para aprovação final
+                # 2. Notifica o operador individual e o GRUPO ADMIN (Item 6)
+                if operador_num or grupo_jid_empresa:
+                    total_fmt = f"R$ {info.get('total', 0):,.2f}"
+                    nomes_nfs = ", ".join([f"NF {it['numero_nf']}" for it in itens_elegíveis])
+                    msg_op = (
+                        f"⚠️ *ALERTA DE CARTÓRIO*\n"
+                        f"Empresa: *{config.get('empresa_nome', cnpj)}*\n"
+                        f"Cliente: *{cliente}*\n"
+                        f"Débito: *{total_fmt}* (vencido há {max_dias} dias)\n"
+                        f"Títulos: {nomes_nfs}\n\n"
+                        f"O prazo de 20 dias se encerrou. O cliente já foi avisado.\n"
+                        f"Confirma o envio para protesto?\n\n"
+                        f"✅ CARTÓRIO_SIM_{cnpj}_{cliente.replace(' ', '_')[:20]}\n"
+                        f"❌ CARTÓRIO_NAO — para manter em aberto mais tempo"
+                    )
                     if operador_num:
-                        total_fmt = f"R$ {info.get('total', 0):,.2f}"
-                        nomes_nfs = ", ".join([f"NF {it['numero_nf']}" for it in itens_elegíveis])
-                        msg_op = (
-                            f"⚠️ *ALERTA DE CARTÓRIO*\n"
-                            f"Cliente: *{cliente}*\n"
-                            f"Débito: *{total_fmt}* (vencido há {max_dias} dias)\n"
-                            f"Títulos: {nomes_nfs}\n\n"
-                            f"O prazo de 20 dias se encerrou. O cliente já foi avisado.\n"
-                            f"Confirma o envio para protesto?\n\n"
-                            f"✅ CARTÓRIO_SIM_{cnpj}_{cliente.replace(' ', '_')[:20]}\n"
-                            f"❌ CARTÓRIO_NAO — para manter em aberto mais tempo"
-                        )
                         evo.enviar_mensagem_texto(operador_num, msg_op)
                         print(f"   📋 Operador notificado sobre cartório de {cliente}.")
-                    continue
+                    # Notifica também o grupo Admin (Item 6)
+                    if grupo_jid_empresa:
+                        evo.enviar_mensagem_texto(grupo_jid_empresa, msg_op)
+                        print(f"   📊 Grupo Admin notificado sobre cartório de {cliente}.")
+                continue
 
                 # ─── Dias 1-19: Enviar mensagem IA ──────────────────
                 # Verifica se já enviamos hoje (nas últimas 20h)
@@ -438,6 +447,43 @@ def disparar_negociacoes_ia(cnpj_filtro=None, forcar_hoje=False):
 
                 time.sleep(5)
                 
+            # --- ALERTA DE TÍTULOS SEM DOCUMENTOS (Item 11) ---
+            try:
+                conn_sd = conectar(cnpj)
+                titulos_sem_doc = conn_sd.cursor().execute(
+                    "SELECT t.pagador, t.numero_nf, t.vencimento, t.valor, c.cnpj as cnpj_cliente "
+                    "FROM titulos t LEFT JOIN clientes c ON trim(c.nome)=trim(t.pagador) "
+                    "WHERE t.status='Aberto' AND t.acao='Cobrar'"
+                ).fetchall()
+                conn_sd.close()
+                
+                alertas_sem_doc = []
+                for row in titulos_sem_doc:
+                    nf = str(row[1] or '').lstrip('0').strip()
+                    conn_chk = conectar(cnpj)
+                    tem_doc = conn_chk.cursor().execute(
+                        "SELECT id FROM documentos_fiscais WHERE num_nf=? OR num_nf LIKE ? LIMIT 1",
+                        (nf, f'%{nf}%')
+                    ).fetchone()
+                    conn_chk.close()
+                    if not tem_doc:
+                        alertas_sem_doc.append(row)
+                
+                if alertas_sem_doc and grupo_jid_empresa:
+                    linhas = [f"🔴 {r[0]} | NF {r[1]} | CNPJ: {r[4] or 'N/A'} | Venc: {r[2]}" for r in alertas_sem_doc[:10]]
+                    msg_sem_doc = (
+                        f"🚨 *ALERTA: TÍTULOS SEM DOCUMENTOS*\n"
+                        f"Empresa: {config.get('empresa_nome', cnpj)}\n\n"
+                        f"Os seguintes títulos estão em aberto mas SEM NFe/Boleto indexado:\n\n"
+                        + "\n".join(linhas) +
+                        f"\n\nTotal: {len(alertas_sem_doc)} título(s)\n"
+                        f"Acesse o CRM > Documentos para adicionar manualmente."
+                    )
+                    evo.enviar_mensagem_texto(grupo_jid_empresa, msg_sem_doc)
+                    print(f"   🚨 Alerta de {len(alertas_sem_doc)} título(s) sem documentos enviado para grupo Admin.")
+            except Exception as e_sd:
+                print(f"   ⚠️ Erro ao verificar títulos sem documentos: {e_sd}")
+
             # --- ENVIO DO RELATORIO DIÁRIO (FIM DO CICLO DA EMPRESA) ---
             try:
                 # Localiza se existe um grupo unificado configurado no banco central
@@ -459,8 +505,6 @@ def disparar_negociacoes_ia(cnpj_filtro=None, forcar_hoje=False):
 
         except Exception as e:
             print(f"   ❌ Erro na negociação IA ({cnpj}): {e}")
-
-
 def processar_fila_cartorio(cnpj_filtro=None):
     """
     Motor do Cartório:
@@ -476,6 +520,19 @@ def processar_fila_cartorio(cnpj_filtro=None):
         cnpj = ag['empresa_dona_cnpj']
         try:
             conn = conectar(cnpj)
+            
+            # --- WATCHDOG: Reset de jobs travados em "Processando" há mais de 10 minutos ---
+            conn.cursor().execute("""
+                UPDATE cartorio_jobs 
+                SET status_automacao = 'Erro', 
+                    log_erro = 'Timeout: O robô ficou travado em Processando por mais de 10 minutos. Verifique se o navegador estava aberto e tente novamente.',
+                    data_execucao = ?
+                WHERE status_automacao = 'Processando'
+                AND data_execucao IS NOT NULL
+                AND (CAST(strftime('%s','now') AS INTEGER) - CAST(strftime('%s', data_execucao) AS INTEGER)) > 600
+            """, (datetime.now().strftime("%Y-%m-%d %H:%M:%S"),))
+            conn.commit()
+            
             # Busca jobs pendentes
             jobs = conn.cursor().execute(
                 "SELECT id, titulo_id FROM cartorio_jobs WHERE status_automacao = 'Pendente' ORDER BY id ASC"
@@ -485,6 +542,7 @@ def processar_fila_cartorio(cnpj_filtro=None):
                 conn.close()
                 continue
                 
+            from src.database import carregar_configuracoes_db
             config = carregar_configuracoes_db(cnpj)
             intervalo = config.get('cartorio_interval_min', 5)
             
@@ -509,7 +567,8 @@ def processar_fila_cartorio(cnpj_filtro=None):
             
             # --- 1. VERIFICAÇÃO DE DADOS ESSENCIAIS (EMAIL EXTRACTION) ---
             conn.row_factory = __import__('sqlite3').Row
-            titulo = conn.cursor().execute("SELECT * FROM titulos WHERE id=?", (titulo_id,)).fetchone()
+            row = conn.cursor().execute("SELECT * FROM titulos WHERE id=?", (titulo_id,)).fetchone()
+            titulo = dict(row) if row else None
             
             # Se a emissão não estiver preenchida (nem pelo scanner passado nem manual)
             if titulo and not titulo.get('emissao'):
@@ -534,19 +593,14 @@ def processar_fila_cartorio(cnpj_filtro=None):
                     conn.close()
                     continue
             
-            # Marca como processando para evitar duplicidade
-            conn.cursor().execute("UPDATE cartorio_jobs SET status_automacao = 'Processando' WHERE id = ?", (job_id,))
+            # Marca a data_execucao agora (para o watchdog saber quando começou)
+            agora_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            # Deixa como Pendente para o robô local pegar. O watchdog só atua se o robô local pegar (que muda pra Processando).
+            conn.cursor().execute("UPDATE cartorio_jobs SET data_execucao = ? WHERE id = ?", (agora_str, job_id,))
             conn.commit()
             conn.close()
             
-            # Executa a automação Playwright (Async -> Sync wrapper)
-            robot = CartorioAutomation(cnpj)
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # Se já estiver rodando (dentro do FastAPI), criamos uma task
-                asyncio.create_task(robot.enviar_titulo(titulo_id))
-            else:
-                asyncio.run(robot.enviar_titulo(titulo_id))
+            print(f"   ✅ Título ID {titulo_id} está pronto na fila (Pendente) aguardando o Robô Local.")
                 
         except Exception as e:
             print(f"   ❌ Erro ao processar fila de cartório ({cnpj}): {e}")

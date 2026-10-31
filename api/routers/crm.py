@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Header, Response
+from fastapi import APIRouter, HTTPException, Header, Response, UploadFile, File, Form
 from pydantic import BaseModel
 from typing import List, Optional
 from src.database import listar_clientes_db, salvar_cliente_db, excluir_cliente_db, listar_titulos_por_cliente, atualizar_titulo_status_acao, conectar
@@ -30,7 +30,7 @@ class ClientModel(BaseModel):
 class TitleStatusUpdate(BaseModel):
     status: str # "Aberto", "Pago", "Negociado", "Cartório", "Baixado"
     acao: str   # "Cobrar", "Pausar"
-    data_promessa: Optional[str] = None # Para o caso de Negociado
+    data_promessa: Optional[str] = None # Data prometida pelo cliente (YYYY-MM-DD ou DD/MM/YYYY)
 
 class ChargePayload(BaseModel):
     canais: List[str] = ["whatsapp", "email"]
@@ -39,7 +39,110 @@ class ChargePayload(BaseModel):
 def get_clients(x_company_cnpj: str = Header(...)):
     cnpj = get_cnpj(x_company_cnpj)
     clientes = listar_clientes_db(cnpj)
+    
+    conn = conectar(cnpj)
+    conn.row_factory = dict_factory
+    c = conn.cursor()
+    try:
+        import json as _json
+        
+        SUCESSO_STATUS = ('Sucesso', 'Sucesso Parcial', 'Sucesso Total')
+        COBRANCA_TIPOS = ('Cobrança Manual', 'WhatsApp/Email', 'Cobrança Automática', 'Cobrança Individual')
+        
+        for cli in clientes:
+            nome = cli.get('nome', '').strip()
+            
+            # 1. Check if client has unresolved titles
+            try:
+                row_unresolved = c.execute("""
+                    SELECT count(*) as cnt FROM titulos
+                    WHERE trim(pagador) = ? AND status NOT IN ('Pago', 'Baixado', 'Cancelado')
+                """, (nome,)).fetchone()
+                has_unresolved = (row_unresolved.get('cnt', 0) > 0) if row_unresolved else False
+            except:
+                has_unresolved = False
+            
+            # 2. Count charges per channel by parsing detalhes JSON
+            total_whatsapp = 0
+            total_email = 0
+            total_analu = 0
+            
+            # Fetch all charge logs for this client
+            try:
+                logs = c.execute("""
+                    SELECT tipo_envio, status, detalhes FROM logs_envio
+                    WHERE cliente = ?
+                    AND tipo_envio IN ('Cobrança Manual', 'WhatsApp/Email', 'Cobrança Automática', 'Cobrança Individual')
+                """, (nome,)).fetchall()
+                
+                for log in logs:
+                    status = log.get('status', '')
+                    detalhes_raw = log.get('detalhes', '') or ''
+                    
+                    # Try to parse detalhes as JSON
+                    try:
+                        det = _json.loads(detalhes_raw)
+                    except:
+                        det = {}
+                    
+                    # Count WhatsApp: res_wa is True, or canais.whatsapp contains "OK"
+                    wa_ok = False
+                    email_ok = False
+                    
+                    if isinstance(det, dict):
+                        # Format 1: {"res_wa": true/false, "res_email": true/false}
+                        if 'res_wa' in det:
+                            wa_ok = bool(det.get('res_wa'))
+                        if 'res_email' in det:
+                            email_ok = bool(det.get('res_email'))
+                        
+                        # Format 2: {"canais": {"whatsapp": "OK (1/1)", "email": "..."}}
+                        canais = det.get('canais', {})
+                        if isinstance(canais, dict):
+                            wa_val = str(canais.get('whatsapp', '') or '')
+                            mail_val = str(canais.get('email', '') or '')
+                            if 'OK' in wa_val or 'Enviado' in wa_val:
+                                wa_ok = True
+                            if 'OK' in mail_val or 'Enviado' in mail_val:
+                                email_ok = True
+                    
+                    # If no JSON info but status is success, count as WhatsApp (legacy)
+                    if not det and status in SUCESSO_STATUS:
+                        wa_ok = True
+                    
+                    if wa_ok:
+                        total_whatsapp += 1
+                    if email_ok:
+                        total_email += 1
+                        
+            except Exception as e:
+                print(f"Erro ao contar cobranças de {nome}: {e}")
+            
+            # 3. Count Analu (negociacoes)
+            try:
+                row_neg = c.execute("""
+                    SELECT count(*) as cnt FROM negociacoes
+                    WHERE cliente = ?
+                """, (nome,)).fetchone()
+                total_analu = (row_neg.get('cnt', 0)) if row_neg else 0
+            except:
+                total_analu = 0
+            
+            total_cobrancas = total_whatsapp + total_email + total_analu
+            
+            cli['has_unresolved'] = has_unresolved
+            cli['total_cobrancas'] = total_cobrancas
+            cli['cobrancas_whatsapp'] = total_whatsapp
+            cli['cobrancas_email'] = total_email
+            cli['cobrancas_analu'] = total_analu
+            
+    except Exception as e:
+        print(f"Erro ao enriquecer dados dos clientes no CRM: {e}")
+    finally:
+        conn.close()
+        
     return {"clients": clientes}
+
 
 @router.post("/clients")
 def save_client(client: ClientModel, x_company_cnpj: str = Header(...)):
@@ -56,7 +159,7 @@ def update_client(id: int, client: ClientModel, x_company_cnpj: str = Header(...
     try:
         c.execute("""
             UPDATE clientes 
-            SET nome=?, cnpj=?, whatsapp=?, email=?, contato=?
+            SET nome=?, cnpj=?, whatsapp=?, email=?, contato=?, scanner_pendente=0
             WHERE id=?
         """, (client.nome, client.cnpj, client.whatsapp, client.email, client.contato, id))
         conn.commit()
@@ -98,16 +201,130 @@ def get_all_titles(status: Optional[str] = None, x_company_cnpj: str = Header(..
 def get_client_titles(nome: str, x_company_cnpj: str = Header(...)):
     cnpj = get_cnpj(x_company_cnpj)
     titulos = listar_titulos_por_cliente(cnpj, nome)
+    
+    # Enriquece cada título com o contador de cobranças enviadas por canal (logs_envio + negociacoes)
+    conn = conectar(cnpj)
+    conn.row_factory = dict_factory
+    c = conn.cursor()
+    try:
+        import json as _json
+        SUCESSO_STATUS = ('Sucesso', 'Sucesso Parcial', 'Sucesso Total')
+        
+        # Obter todos os logs_envio do cliente para evitar consultas repetidas
+        logs = c.execute("""
+            SELECT tipo_envio, status, detalhes FROM logs_envio
+            WHERE cliente = ?
+            AND tipo_envio IN ('Cobrança Manual', 'WhatsApp/Email', 'Cobrança Automática', 'Cobrança Individual')
+        """, (nome,)).fetchall()
+        
+        # Obter todas as negociacoes do cliente
+        negociacoes = c.execute("""
+            SELECT titulos_ids FROM negociacoes
+            WHERE cliente = ?
+        """, (nome,)).fetchall()
+        
+        for t in titulos:
+            nf = str(t.get('numero_nf', '') or '').strip()
+            total_whatsapp = 0
+            total_email = 0
+            total_analu = 0
+            
+            # 1. Conta nos logs de envio (WhatsApp/Email manual e automático)
+            for log in logs:
+                status = log.get('status', '')
+                detalhes_raw = log.get('detalhes', '') or ''
+                
+                try:
+                    det = _json.loads(detalhes_raw)
+                except:
+                    det = {}
+                
+                if not isinstance(det, dict):
+                    continue
+                
+                # Check if this log references the specific NF
+                contains_nf = False
+                
+                # Format A: {"titulos": ["15093"]} or similar list of strings/ints
+                titulos_list = det.get('titulos', [])
+                if isinstance(titulos_list, list):
+                    for item in titulos_list:
+                        if isinstance(item, dict):
+                            # Format B: {"titulos": [{"numero_nf": "19078", "valor": 1200.0}]}
+                            if str(item.get('numero_nf', '')).strip() == nf:
+                                contains_nf = True
+                                break
+                        elif str(item).strip() == nf:
+                            contains_nf = True
+                            break
+                            
+                if not contains_nf:
+                    continue
+                    
+                # Determine channels if NF is present
+                wa_ok = False
+                email_ok = False
+                
+                # Format 1: {"res_wa": true, "res_email": true}
+                if 'res_wa' in det:
+                    wa_ok = bool(det.get('res_wa'))
+                if 'res_email' in det:
+                    email_ok = bool(det.get('res_email'))
+                
+                # Format 2: {"canais": {"whatsapp": "OK (1/1)", "email": "..."}}
+                canais = det.get('canais', {})
+                if isinstance(canais, dict):
+                    wa_val = str(canais.get('whatsapp', '') or '')
+                    mail_val = str(canais.get('email', '') or '')
+                    if 'OK' in wa_val or 'Enviado' in wa_val:
+                        wa_ok = True
+                    if 'OK' in mail_val or 'Enviado' in mail_val:
+                        email_ok = True
+                
+                # If no specific channel info but status is successful, count as WhatsApp (legacy)
+                if 'res_wa' not in det and 'canais' not in det and status in SUCESSO_STATUS:
+                    wa_ok = True
+                
+                if wa_ok:
+                    total_whatsapp += 1
+                if email_ok:
+                    total_email += 1
+            
+            # 2. Conta nas negociações IA (Analu)
+            for neg in negociacoes:
+                titulos_ids_raw = neg.get('titulos_ids', '') or ''
+                # titulos_ids can be a JSON array or a comma-separated string, or simple string
+                try:
+                    t_ids = _json.loads(titulos_ids_raw)
+                except:
+                    t_ids = [x.strip() for x in titulos_ids_raw.split(',') if x.strip()]
+                
+                contains_nf_analu = False
+                if isinstance(t_ids, list):
+                    if any(str(x).strip() == nf for x in t_ids):
+                        contains_nf_analu = True
+                elif str(t_ids).strip() == nf:
+                    contains_nf_analu = True
+                
+                if contains_nf_analu:
+                    total_analu += 1
+            
+            t['total_cobranças'] = total_whatsapp + total_email + total_analu
+            t['cobrancas_whatsapp'] = total_whatsapp
+            t['cobrancas_email'] = total_email
+            t['cobrancas_analu'] = total_analu
+            
+    except Exception as e:
+        print(f"Aviso: não foi possível calcular total_cobranças por título: {e}")
+    finally:
+        conn.close()
+    
     return {"titles": titulos}
 
 @router.patch("/titles/{id_titulo}")
 def update_title_status(id_titulo: int, update: TitleStatusUpdate, x_company_cnpj: str = Header(...)):
     cnpj = get_cnpj(x_company_cnpj)
     
-    # Base user logic: The status changing logic.
-    # Open -> Charge or Pause.
-    # Paid -> Baixado (move).
-    # Negotiated -> If data_promessa, it should be handled by a scheduler, but we record the status.
     novo_status = update.status
     nova_acao = update.acao
     
@@ -119,6 +336,22 @@ def update_title_status(id_titulo: int, update: TitleStatusUpdate, x_company_cnp
         nova_acao = "Pausar"
         
     atualizar_titulo_status_acao(cnpj, id_titulo, novo_status, nova_acao)
+    
+    # Salva data_promessa se fornecida (Item 7)
+    if update.data_promessa is not None:
+        conn = conectar(cnpj)
+        try:
+            val = update.data_promessa.strip() if update.data_promessa.strip() else None
+            conn.cursor().execute(
+                "UPDATE titulos SET data_promessa = ? WHERE id = ?",
+                (val, id_titulo)
+            )
+            conn.commit()
+        except Exception as e:
+            print(f"Aviso: falha ao salvar data_promessa: {e}")
+        finally:
+            conn.close()
+    
     return {"success": True, "message": f"Título atualizado para {novo_status} - {nova_acao}"}
 
 @router.get("/dashboard-stats")
@@ -347,5 +580,104 @@ def list_conversations(x_company_cnpj: str = Header(...)):
             del row["history_json"]
 
         return {"conversations": res}
+    finally:
+        conn.close()
+
+
+# ─── UPLOAD MANUAL DE DOCUMENTOS POR TÍTULO (Item 9) ─────────────────────
+
+@router.post("/titles/{id_titulo}/documentos/upload")
+async def upload_documento_titulo(
+    id_titulo: int,
+    tipo: str = Form(...),  # NFe, NFS, Fatura, Boleto, XML
+    arquivo: UploadFile = File(...),
+    x_company_cnpj: str = Header(...)
+):
+    """
+    Permite adicionar manualmente NFe, NFS, Fatura de Locação, Boleto ou XML a um título.
+    O arquivo é salvo em temp_data/manual_docs/ e indexado na tabela documentos_fiscais.
+    """
+    cnpj = get_cnpj(x_company_cnpj)
+    
+    TIPOS_VALIDOS = ['NFe', 'NFS', 'Fatura', 'Boleto', 'XML']
+    if tipo not in TIPOS_VALIDOS:
+        raise HTTPException(status_code=400, detail=f"Tipo inválido. Use: {', '.join(TIPOS_VALIDOS)}")
+    
+    conn = conectar(cnpj)
+    conn.row_factory = dict_factory
+    try:
+        titulo = conn.cursor().execute(
+            "SELECT * FROM titulos WHERE id = ?", (id_titulo,)
+        ).fetchone()
+        if not titulo:
+            raise HTTPException(status_code=404, detail="Título não encontrado.")
+        
+        # Salva o arquivo no disco
+        ext = os.path.splitext(arquivo.filename)[1].lower() if arquivo.filename else '.pdf'
+        save_dir = os.path.join("temp_data", "manual_docs", str(id_titulo))
+        os.makedirs(save_dir, exist_ok=True)
+        
+        filename_safe = f"{tipo}_{titulo['numero_nf']}_{titulo['pagador'][:20].replace(' ','_')}{ext}"
+        save_path = os.path.join(save_dir, filename_safe)
+        
+        content = await arquivo.read()
+        with open(save_path, 'wb') as f:
+            f.write(content)
+        
+        # Indexa na tabela documentos_fiscais
+        agora = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        conn.cursor().execute("""
+            INSERT INTO documentos_fiscais 
+            (cnpj_cliente, num_nf, tipo, fpath_local, created_at)
+            VALUES (?, ?, ?, ?, ?)
+        """, ('manual', titulo['numero_nf'], tipo, save_path, agora))
+        conn.commit()
+        
+        return {"success": True, "message": f"Documento '{tipo}' salvo e indexado com sucesso.", "filename": filename_safe}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao salvar documento: {str(e)}")
+    finally:
+        conn.close()
+
+
+@router.get("/alertas/sem-documentos")
+def alertas_sem_documentos(x_company_cnpj: str = Header(...)):
+    """
+    Retorna títulos abertos que não possuem documentos indexados.
+    Usado pela Analu para avisar o grupo Admin que precisam de arquivos. (Item 11)
+    """
+    cnpj = get_cnpj(x_company_cnpj)
+    conn = conectar(cnpj)
+    conn.row_factory = dict_factory
+    try:
+        # Títulos abertos
+        titulos = conn.cursor().execute(
+            "SELECT t.id, t.pagador, t.numero_nf, t.vencimento, t.valor, c.cnpj "
+            "FROM titulos t LEFT JOIN clientes c ON trim(c.nome) = trim(t.pagador) "
+            "WHERE t.status = 'Aberto' AND t.acao = 'Cobrar'"
+        ).fetchall()
+        
+        sem_docs = []
+        for t in titulos:
+            nf = str(t.get('numero_nf', '') or '').lstrip('0').strip()
+            doc = conn.cursor().execute(
+                "SELECT id FROM documentos_fiscais WHERE num_nf = ? OR num_nf LIKE ? LIMIT 1",
+                (nf, f"%{nf}%")
+            ).fetchone()
+            if not doc:
+                # Verifica também no temp_data fisicamente
+                temp_dir = os.path.join("temp_data", "attachments")
+                encontrou_fisico = False
+                if os.path.exists(temp_dir):
+                    for sub in os.listdir(temp_dir):
+                        if nf in sub:
+                            encontrou_fisico = True
+                            break
+                if not encontrou_fisico:
+                    sem_docs.append(t)
+        
+        return {"sem_documentos": sem_docs, "total": len(sem_docs)}
     finally:
         conn.close()

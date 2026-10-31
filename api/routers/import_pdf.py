@@ -3,8 +3,7 @@ from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 from src.extractor import ler_pdf_bruto, processar_dataframe_mapeado
 from src.database import listar_clientes_db, salvar_dados_no_banco, conectar
-import tempfile
-import pandas as pd
+import os
 import tempfile
 import pandas as pd
 import json
@@ -26,6 +25,7 @@ async def upload_pdf(
     layout: str = Form(...), # JSON string of LayoutData due to multipart/form-data
     file: UploadFile = File(...)
 ):
+    tmp_path = None
     try:
         layout_dict = json.loads(layout)
         
@@ -34,10 +34,10 @@ async def upload_pdf(
             tmp.write(await file.read())
             tmp_path = tmp.name
         
-        # Usa o extractor existente
-        df_bruto = ler_pdf_bruto(tmp_path)
+        # Usa o extractor com fallback de IA Gemini
+        df_bruto = ler_pdf_bruto(tmp_path, cnpj=x_company_cnpj)
         if df_bruto is None:
-            raise HTTPException(status_code=400, detail="Não foi possível ler o PDF")
+            raise HTTPException(status_code=400, detail="Não foi possível ler o PDF. O arquivo não contém texto reconhecível ou a chave da IA não foi informada.")
             
         mapa_atual = {
             'vencimento': layout_dict['col_vencimento'], 
@@ -46,6 +46,9 @@ async def upload_pdf(
             'pagador': layout_dict['col_pagador']
         }
         dados_processados = processar_dataframe_mapeado(df_bruto, mapa_atual)
+        if not dados_processados:
+            raise HTTPException(status_code=400, detail="Nenhum título válido foi extraído com o layout selecionado. Verifique os nomes das colunas mapeadas.")
+
         df_rev = pd.DataFrame(dados_processados)
         
         # Obtem clientes atuais
@@ -62,8 +65,16 @@ async def upload_pdf(
             "titulos": titulos_lidos,
             "novos_clientes_necessarios": novos_clientes
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except:
+                pass
 
 class TituloConfirm(BaseModel):
     pagador: str
@@ -119,19 +130,31 @@ def delete_layout(id: int, x_company_cnpj: str = Header(...)):
     return {"success": True, "message": "Layout deletado com sucesso."}
 
 @router.post("/preview-pdf")
-async def preview_new_pdf(file: UploadFile = File(...)):
+async def preview_new_pdf(
+    file: UploadFile = File(...),
+    x_company_cnpj: Optional[str] = Header(None)
+):
+    tmp_path = None
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
             tmp.write(await file.read())
             tmp_path = tmp.name
         
-        df_bruto = ler_pdf_bruto(tmp_path)
+        df_bruto = ler_pdf_bruto(tmp_path, cnpj=x_company_cnpj)
         if df_bruto is None:
-            raise HTTPException(status_code=400, detail="Não foi possível identificar colunas no PDF")
+            raise HTTPException(status_code=400, detail="Não foi possível identificar colunas no PDF. O arquivo não contém texto reconhecível ou a chave da IA não foi informada.")
         
         # Envia os headers e algumas linhas de exemplo
         headers = [str(col) for col in df_bruto.columns.tolist() if str(col).strip() != '']
         sample_rows = df_bruto.head(5).astype(str).to_dict("records")
         return {"success": True, "headers": headers, "sample": sample_rows}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except:
+                pass

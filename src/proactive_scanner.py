@@ -167,8 +167,11 @@ class ProactiveScanner:
                                 nome_final = res_cli[0] if res_cli else meta.get('nome_detectado', "Cliente Novo (Scanner)")
                                 
                                 if not res_cli:
-                                    # Cria o cliente se for novo
-                                    c.execute("INSERT INTO clientes (nome, cnpj) VALUES (?, ?)", (nome_final, cnpj_extraido))
+                                    # Cria o cliente se for novo, sinalizando como scanner_pendente para preenchimento de contato no CRM
+                                    c.execute(
+                                        "INSERT INTO clientes (nome, cnpj, scanner_pendente) VALUES (?, ?, 1)", 
+                                        (nome_final, cnpj_extraido)
+                                    )
                                 
                                 # 2. Verifica se o título já existe
                                 c.execute("SELECT id FROM titulos WHERE numero_nf = ? AND pagador = ?", (nf_num, nome_final))
@@ -183,11 +186,14 @@ class ProactiveScanner:
                                     
                                     if not venc: venc = (datetime.now() + timedelta(days=15)).strftime("%d/%m/%Y")
 
+                                    # Se o cliente acabou de ser criado (scanner_pendente = 1), o título entra como Pausado para não estourar erro de falta de contato.
+                                    acao_inicial = 'Pausar' if not res_cli else 'Cobrar'
+
                                     c.execute("""
                                         INSERT INTO titulos (pagador, numero_nf, vencimento, emissao, valor, status, acao)
-                                        VALUES (?, ?, ?, ?, ?, 'Aberto', 'Cobrar')
-                                    """, (nome_final, nf_num, venc, emissao_nf, valor_nf))
-                                    print(f"      🚀 AUTO-LANÇAMENTO: NF {nf_num} para {nome_final} (R$ {valor_nf:.2f})")
+                                        VALUES (?, ?, ?, ?, ?, 'Aberto', ?)
+                                    """, (nome_final, nf_num, venc, emissao_nf, valor_nf, acao_inicial))
+                                    print(f"      🚀 AUTO-LANÇAMENTO: NF {nf_num} para {nome_final} (R$ {valor_nf:.2f}) [{acao_inicial}]")
 
                             print(f"      Indexado (Repo V2): {tipo} {nf_num} para CNPJ {cnpj_extraido}")
                     else:
@@ -234,11 +240,11 @@ class ProactiveScanner:
         alvo = (datetime.now() + timedelta(days=2)).strftime("%d/%m/%Y")
         
         try:
-            # Só lembra clientes com títulos ativos para cobrança (não pausados)
+            # Seleciona todos os títulos em Aberto (Cobrar ou Pausar) para a data alvo
             c.execute("""
-                SELECT id, pagador, numero_nf, valor
+                SELECT id, pagador, numero_nf, valor, acao
                 FROM titulos
-                WHERE vencimento = ? AND status = 'Aberto' AND acao = 'Cobrar'
+                WHERE vencimento = ? AND status = 'Aberto'
             """, (alvo,))
             titulos = c.fetchall()
             
@@ -247,31 +253,52 @@ class ProactiveScanner:
             evo = EvolutionController(config)
             mgr = Manager(cnpj) # Manager já carrega as instâncias
             
-            for tid, pagador, nf, valor in titulos:
+            for tid, pagador, nf, valor, acao in titulos:
                 # Evita enviar o mesmo lembrete duas vezes (Log de auditoria)
                 c.execute("SELECT count(*) FROM logs_envio WHERE cliente = ? AND tipo_envio = 'Lembrete' AND detalhes LIKE ?", 
                           (pagador, f"%NF {nf}%"))
                 if c.fetchone()[0] > 0: continue
 
                 # Busca contato do cliente
-                c.execute("SELECT whatsapp, email FROM clientes WHERE trim(nome) = ?", (pagador.strip(),))
+                c.execute("SELECT whatsapp, email, scanner_pendente FROM clientes WHERE trim(nome) = ?", (pagador.strip(),))
                 contato = c.fetchone()
                 
-                if contato and (contato[0] or contato[1]):
+                tem_contato = False
+                if contato:
+                    whatsapp, email, scanner_pendente = contato
+                    # Considera que tem contato se WhatsApp/Email existir E a flag de pendência (1) já tiver sido removida (0)
+                    if (whatsapp or email) and not scanner_pendente:
+                        tem_contato = True
+
+                # ROTINA EXTRA DE AUTO-ATIVAÇÃO SOLICITADA PELO USUÁRIO
+                if acao == 'Pausar' and tem_contato:
+                    c.execute("UPDATE titulos SET acao = 'Cobrar' WHERE id = ?", (tid,))
+                    conn.commit()
+                    print(f"🔄 Auto-Ativação do Título {nf} para {pagador}: o contato foi preenchido.")
+                    acao = 'Cobrar'
+
+                if acao == 'Pausar':
+                    # Se continua pausado (sem contato), não tenta enviar para o cliente
+                    if not tem_contato:
+                        operador = config.get('operador_whatsapp')
+                        if operador:
+                            aviso = f"Oi Fernando! Tudo bem?\n\nIdentifiquei que o cliente *{pagador}* tem a NF {nf} vencendo daqui a 2 dias, mas como não tenho o WhatsApp ou Email dele aqui no banco do Credos, não consegui enviar o lembrete proativo. 😕\n\n*Pode me enviar por favor o telefone/whatsapp dele para eu adicionar e já deixar tudo em ordem?*"
+                            # Verifica se já avisou o Fernando hoje
+                            c.execute("SELECT count(*) FROM logs_envio WHERE cliente = 'SISTEMA' AND tipo_envio = 'Aviso Operador' AND detalhes LIKE ?", (f"%{pagador}%",))
+                            if c.fetchone()[0] == 0:
+                                evo.enviar_mensagem_texto(operador, aviso)
+                                mgr.salvar_log_envio("SISTEMA", "Aviso Operador", "Sucesso", f"Solicitado contato de {pagador} ao Fernando", "Analu Proativa")
+                    continue
+
+                # Se acao é Cobrar e tem contato, envia o lembrete
+                if tem_contato:
                     # Analu envia lembrete gentil
                     msg = f"Olá! Aqui é a Analu do financeiro. 🤖\n\nPassando para lembrar que a sua NF {nf} no valor de R$ {valor:.2f} vence daqui a 2 dias ({alvo}).\n\nGostaria de confirmar se deu tudo certo com o recebimento do boleto ou se precisa de alguma ajuda? 😊"
-                    num = contato[0] if contato[0] else None
+                    num = whatsapp if whatsapp else None
                     if num:
                         res = evo.enviar_mensagem_texto(num, msg)
                         if res:
                             mgr.salvar_log_envio(pagador, "Lembrete", "Sucesso", f"Lembrete de vencimento NF {nf} enviado para {num}", "Analu Proativa")
-                else:
-                    # Analu não tem contato: Pergunta ao Fernando
-                    operador = config.get('operador_whatsapp')
-                    if operador:
-                        aviso = f"Oi Fernando! Tudo bem?\n\nIdentifiquei que o cliente *{pagador}* tem a NF {nf} vencendo daqui a 2 dias, mas como não tenho o WhatsApp ou Email dele aqui no banco do Credos, não consegui enviar o lembrete proativo. 😕\n\n*Pode me enviar por favor o telefone/whatsapp dele para eu adicionar e já deixar tudo em ordem?*"
-                        evo.enviar_mensagem_texto(operador, aviso)
-                        mgr.salvar_log_envio("SISTEMA", "Aviso Operador", "Sucesso", f"Solicitado contato de {pagador} ao Fernando", "Analu Proativa")
 
         except Exception as e:
             print(f"Erro em verificar_prevencimento ({cnpj}): {e}")

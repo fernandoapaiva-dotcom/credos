@@ -22,12 +22,12 @@ class CartorioAutomation:
         try:
             # Conecta à instância que o usuário abriu via ABRIR_CHROME_ROBO.bat
             # Usamos 127.0.0.1 para evitar problemas com IPv6 (::1) no Windows
-            browser = await playwright.chromium.connect_over_cdp("http://127.0.0.1:9222")
+            browser = await playwright.chromium.connect_over_cdp("http://127.0.0.1:9222", timeout=10000)
             # Usa o primeiro contexto disponível (que terá a sessão do usuário)
             context = browser.contexts[0]
             return context
         except Exception as e:
-            raise Exception("Navegador não detectado. Certifique-se de que você abriu o Edge usando o arquivo 'ABRIR_EDGE_ROBO.bat'.")
+            raise Exception(f"Navegador não detectado na porta 9222. Certifique-se de que o Edge/Chrome está aberto via 'ABRIR_EDGE_ROBO.bat' na máquina onde o sistema roda. Detalhe: {e}")
 
     async def enviar_titulo(self, titulo_id, dry_run=True):
         """
@@ -184,7 +184,18 @@ class CartorioAutomation:
                 await page.wait_for_load_state("networkidle")
                 await page.screenshot(path="passo4_revisao.png")
                 
-                if dry_run:
+                # Pedido de Confirmação (Human in the loop)
+                # Verifica a configuração no banco de dados (padrão é 1 = ligado)
+                pedir_confirmacao = str(self.config.get('cartorio_pedir_confirmacao', '1')) == '1'
+                
+                if pedir_confirmacao:
+                    print("🔐 Aguardando confirmação do usuário na tela do navegador...")
+                    confirm = await page.evaluate("confirm('ROBÔ CREDOS\\n\\nOs dados do título foram preenchidos.\\nPor favor, revise-os na tela.\\n\\nTodos os dados estão corretos? Clique em OK para formalizar o protesto no cartório, ou CANCELAR para abortar.')")
+                    if not confirm:
+                        print("❌ Usuário abortou o envio na tela de revisão.")
+                        self._atualizar_job_status(t['id'], "Falha", "Usuário abortou na tela de revisão.")
+                        return False, "Envio abortado pelo usuário."
+                elif dry_run:
                     print("🔐 Modo Dry-Run: parado antes do Passo 5 (Solicitar Protesto).")
                     return True, "Simulação concluída com sucesso até a revisão."
 
@@ -218,14 +229,49 @@ class CartorioAutomation:
                 # Atualiza o job como Sucesso no banco
                 self._atualizar_job_status(t['id'], "Sucesso")
                 
+                # --- NOTIFICAÇÃO AO CLIENTE ---
+                try:
+                    from src.evolution_controller import EvolutionController
+                    evo = EvolutionController(config=self.config, nome_empresa_cliente=self.cnpj_empresa)
+                    whatsapp = str(cli.get('whatsapp', ''))
+                    if whatsapp:
+                        numeros = [n.strip() for n in whatsapp.split(';') if n.strip()]
+                        msg_cartorio = (
+                            f"*Analu (Assistente Virtual) Diz:*\n\n"
+                            f"Olá, {str(cli['nome']).split()[0]}. Conforme avisado anteriormente, "
+                            f"como não chegamos a um acordo efetivo após nossas tentativas de negociação, "
+                            f"informamos que o título *NF {t['numero_nf']}* no valor de *R$ {float(t['valor']):,.2f}* "
+                            f"foi encaminhado para *protesto em cartório*.\n\n"
+                            f"Para regularização, será necessário efetuar o pagamento do débito, aguardar a emissão "
+                            f"da carta de anuência por nossa parte e, posteriormente, apresentar esta carta "
+                            f"junto ao cartório competente, efetuando o pagamento das custas e emolumentos cartoriais.\n\n"
+                            f"Caso tenha dúvidas sobre o procedimento, entre em contato com nosso departamento financeiro."
+                        )
+                        for num in numeros:
+                            evo.enviar_mensagem_texto(num, msg_cartorio)
+                        print(f"✅ Notificação de cartório enviada ao cliente {cli['nome']}.")
+                except Exception as e_notif:
+                    print(f"⚠️ Erro ao enviar notificação de cartório para o cliente: {e_notif}")
+
                 print("✅ Passo 5 concluído! Título enviado ao cartório com sucesso.")
                 return True, "Título protestado com sucesso."
 
             except Exception as e:
-                return False, f"Erro na automação: {str(e)}"
+                err_msg = f"Erro na automação Playwright: {str(e)}"
+                print(f"❌ {err_msg}")
+                # CRÍTICO: Sempre atualiza o status para Erro no banco,
+                # mesmo que a task seja disparada como create_task (fire & forget)
+                try:
+                    self._atualizar_job_status(titulo_id, "Erro", err_msg)
+                except Exception as db_err:
+                    print(f"❌ Erro ao atualizar status no banco: {db_err}")
+                return False, err_msg
             finally:
                 if context:
-                    await context.close()
+                    try:
+                        await context.close()
+                    except:
+                        pass
 
     async def _clicar_prosseguir(self, page):
         """Helper para clicar no botão de avanço do wizard"""

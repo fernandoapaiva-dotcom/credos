@@ -252,8 +252,17 @@ export const Settings: React.FC = () => {
     setWaCheckingStatus(true);
     try {
       const res = await api.post(`/companies/${companyCnpj}/whatsapp/status`);
-      setWaStatus(res.data.status);
-      alert(res.data.status === 'open' ? 'WhatsApp Conectado!' : `Status atual: ${res.data.status}`);
+      const status = res.data.status;
+      setWaStatus(status);
+      if (status === 'open' || status === 'connected') {
+        alert('WhatsApp Conectado com sucesso! ✅');
+      } else if (status === 'connecting') {
+        alert('Status: Conectando / Aguardando leitura do QR Code ⏳');
+      } else if (status === 'closed' || status === 'close' || status === 'disconnected') {
+        alert('Status atual: Desconectado ❌ (Clique em "Gerar QR Code" para conectar)');
+      } else {
+        alert(`Status atual: ${status}`);
+      }
     } catch (e) {
       setWaStatus('erro_conexao');
       alert('Houve um erro ao checar o status.');
@@ -263,22 +272,34 @@ export const Settings: React.FC = () => {
 
   const connectWa = async () => {
     setWaGeneratingQr(true);
+    setWaQrCode(null);
+    setWaStatus('connecting');
     try {
-      await api.post(`/companies/${companyCnpj}/whatsapp/create`);
-      setWaStatus('connecting');
-      fetchQrCode();
+      const res = await api.post(`/companies/${companyCnpj}/whatsapp/create`);
+      if (res.data?.qr_code_base64) {
+        setWaQrCode(res.data.qr_code_base64);
+      } else {
+        fetchQrCode(15);
+      }
     } catch (e: any) {
       alert(e.response?.data?.detail || 'Erro ao criar instância');
+      setWaStatus('erro_conexao');
     }
     setWaGeneratingQr(false);
   };
 
-  const fetchQrCode = async () => {
+  const fetchQrCode = async (retries = 15) => {
     try {
       const res = await api.get(`/companies/${companyCnpj}/whatsapp/qr`);
-      setWaQrCode(res.data.qr_code_base64);
+      if (res.data && res.data.qr_code_base64) {
+        setWaQrCode(res.data.qr_code_base64);
+        return;
+      }
     } catch (e) {
-      setTimeout(fetchQrCode, 3000);
+      // Instance might be creating Baileys socket, retry
+    }
+    if (retries > 0) {
+      setTimeout(() => fetchQrCode(retries - 1), 2000);
     }
   };
 
@@ -414,6 +435,30 @@ export const Settings: React.FC = () => {
                 />
               </div>
             </div>
+
+            {/* Item 8: Toggle PIX */}
+            <div className={`flex items-center justify-between p-4 rounded-xl border-2 transition-all ${config.pix_habilitado !== 0 ? 'bg-green-50 border-green-200 dark:bg-green-900/15 dark:border-green-800' : 'bg-red-50 border-red-200 dark:bg-red-900/15 dark:border-red-800'}`}>
+              <div>
+                <h4 className={`font-bold text-sm flex items-center gap-2 ${config.pix_habilitado !== 0 ? 'text-green-800 dark:text-green-300' : 'text-red-700 dark:text-red-400'}`}>
+                  💳 Habilitar Pagamento via PIX nas Cobranças
+                </h4>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  {config.pix_habilitado !== 0
+                    ? 'A Analu inclui a chave PIX em todas as cobranças automáticas.'
+                    : '⚠️ PIX desabilitado — clientes serão orientados a usar boleto bancário.'}
+                </p>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer ml-4 flex-shrink-0">
+                <input
+                  type="checkbox"
+                  className="sr-only peer"
+                  checked={config.pix_habilitado !== 0}
+                  onChange={e => setConfig({...config, pix_habilitado: e.target.checked ? 1 : 0})}
+                />
+                <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-slate-600 peer-checked:bg-green-500"></div>
+              </label>
+            </div>
+
             
             <hr className="border-slate-200 dark:border-dark-border" />
             
@@ -550,9 +595,9 @@ export const Settings: React.FC = () => {
               <div className="flex-1">
                 <div className="text-sm font-medium text-slate-500 mb-1">Status da Conexão</div>
                 
-                {waStatus === 'open' && <div className="text-xl font-bold text-green-600">Conectado e Pronto ✅</div>}
+                {(waStatus === 'open' || waStatus === 'connected') && <div className="text-xl font-bold text-green-600">Conectado e Pronto ✅</div>}
                 {waStatus === 'connecting' && <div className="text-xl font-bold text-amber-500">Aguardando QR Code... ⏳</div>}
-                {(waStatus === 'closed' || waStatus === 'disconnected') && <div className="text-xl font-bold text-slate-600 dark:text-slate-400">Desconectado ❌</div>}
+                {(waStatus === 'closed' || waStatus === 'close' || waStatus === 'disconnected') && <div className="text-xl font-bold text-slate-600 dark:text-slate-400">Desconectado ❌</div>}
                 {waStatus === 'desconhecido' && <div className="text-xl font-bold text-slate-400">Clique para verificar</div>}
                 {waStatus === 'erro_conexao' && <div className="text-xl font-bold text-red-500">Erro na Evolution API</div>}
               </div>
@@ -563,14 +608,14 @@ export const Settings: React.FC = () => {
                   Checar Status
                 </button>
                 
-                {(waStatus === 'open' || waStatus === 'connecting' || waStatus === 'erro_conexao' || waStatus === 'desconhecido' || waStatus === 'disconnected') && (
+                {(waStatus === 'open' || waStatus === 'connected' || waStatus === 'connecting' || waStatus === 'erro_conexao' || waStatus === 'desconhecido' || waStatus === 'closed' || waStatus === 'close' || waStatus === 'disconnected') && (
                   <button onClick={disconnectWa} disabled={waCheckingStatus || waGeneratingQr || waDisconnecting} className="btn-secondary text-red-600 hover:bg-red-50 border-red-200 mt-2 w-full justify-center">
                     {waDisconnecting ? <Loader2 className="animate-spin mr-2" size={18}/> : <PowerOff size={18} className="mr-2"/>}
                     Desconectar (Resetar Sessão)
                   </button>
                 )}
 
-                {(waStatus === 'closed' || waStatus === 'disconnected' || waStatus === 'desconhecido' || waStatus === 'erro_conexao') && (
+                {(waStatus === 'closed' || waStatus === 'close' || waStatus === 'disconnected' || waStatus === 'desconhecido' || waStatus === 'erro_conexao' || waStatus === 'connecting') && (
                   <button onClick={connectWa} disabled={waCheckingStatus || waGeneratingQr || waDisconnecting} className="btn-primary whitespace-nowrap mt-2 w-full justify-center">
                     {waGeneratingQr ? <Loader2 className="animate-spin mr-2" size={18}/> : <QrCode size={18} className="mr-2"/>}
                     Gerar QR Code
@@ -579,7 +624,14 @@ export const Settings: React.FC = () => {
               </div>
             </div>
 
-            {waQrCode && waStatus !== 'open' && (
+            {waStatus === 'connecting' && !waQrCode && (
+              <div className="flex flex-col items-center justify-center p-8 border-2 border-dashed border-amber-400/40 bg-amber-500/5 rounded-xl mt-6">
+                <Loader2 className="animate-spin text-amber-500 mb-3" size={36} />
+                <p className="text-sm font-medium text-amber-600 dark:text-amber-400">Gerando QR Code com a Evolution API... Aguarde alguns segundos.</p>
+              </div>
+            )}
+
+            {waQrCode && waStatus !== 'open' && waStatus !== 'connected' && (
               <div className="flex flex-col items-center justify-center p-8 border-2 border-dashed border-slate-300 dark:border-dark-border rounded-xl mt-6">
                  <img src={waQrCode} alt="WhatsApp QR Code" className="w-64 h-64 border-4 border-white shadow-lg rounded-lg mb-4" />
                  <p className="text-sm text-slate-500">Abra o WhatsApp no celular, vá em Aparelhos Conectados e escaneie este código.</p>
